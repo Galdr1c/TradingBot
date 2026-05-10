@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pandas
 numpy
 ccxt
@@ -12,4 +12,5 @@ python-dotenv
 scikit-learn
 statsmodels
 ta
-binance-connector
+psutil
+websockets

@@ -1,245 +1,179 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-  Activity, 
-  Bot, 
-  BrainCircuit, 
-  Newspaper, 
-  Settings, 
-  Terminal, 
-  BarChart3,
-  TrendingUp,
-  TrendingDown,
-  LayoutDashboard,
-  Cpu,
-  Database
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  LayoutDashboard, BarChart3, Wallet, Bot,
+  BrainCircuit, Newspaper, Users, Settings, Database
 } from 'lucide-react';
-import { 
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer 
-} from 'recharts';
 import './App.css';
 import * as api from './api';
 
-/* ═══════════════════════════════════════════════════════════════
-   COMPONENTS
-   ═══════════════════════════════════════════════════════════════ */
+import Dashboard  from './pages/Dashboard';
+import Charts     from './pages/Charts';
+import Portfolio  from './pages/Portfolio';
+import Bots       from './pages/Bots';
+import Kronos     from './pages/Kronos';
+import News       from './pages/News';
+import Swarm      from './pages/Swarm';
 
-const NavItem = ({ id, active, label, icon: Icon, onClick }) => (
-  <button className={`nb ${active === id ? 'act' : ''}`} onClick={() => onClick(id)}>
-    <Icon size={20} />
-    <span className="nbl">{label}</span>
-  </button>
-);
+/* ── Sidebar nav config ─────────────────────────────────────────── */
+const NAV = [
+  { id:'dash',      label:'DASH',    icon:LayoutDashboard },
+  { id:'charts',    label:'CHART',   icon:BarChart3 },
+  { id:'portfolio', label:'PORT',    icon:Wallet },
+  { id:'bots',      label:'BOTS',    icon:Bot },
+  { id:'kronos',    label:'AI',      icon:BrainCircuit },
+  { id:'swarm',     label:'SWARM',   icon:Users },
+  { id:'news',      label:'NEWS',    icon:Newspaper },
+];
 
-const MetricCard = ({ label, value, color, sub }) => (
-  <div className="mc">
-    <div className="ml">{label}</div>
-    <div className="mv" style={{ color: color }}>{value}</div>
-    <div style={{ fontSize: '8px', color: '#2a3f55', marginTop: '2px' }}>{sub}</div>
-  </div>
-);
-
-/* ═══════════════════════════════════════════════════════════════
-   MAIN APP
-   ═══════════════════════════════════════════════════════════════ */
-
-function App() {
-  const [page, setPage] = useState('dash');
-  const [tickers, setTickers] = useState([]);
-  const [logs, setLogs] = useState([
-    { t: '18:24:17', tp: 'ok', m: '[System] Connection established to backend.' },
-    { t: '18:24:18', tp: 'info', m: '[Data] Loading market symbols...' },
+/* ── Main App ───────────────────────────────────────────────────── */
+export default function App() {
+  const [page, setPage]         = useState('dash');
+  const [tickers, setTickers]   = useState([]);
+  const [portfolio, setPortfolio] = useState(null);
+  const [logs, setLogs]         = useState([
+    { t:'--:--:--', tp:'ok',   m:'[System] QuantumAI Trading Engine v2.0 starting...' },
+    { t:'--:--:--', tp:'info', m:'[Data]   Connecting to market feeds...' },
   ]);
+  const [wsStatus, setWsStatus] = useState('connecting');
+  const logsEndRef = useRef(null);
+  const wsRef      = useRef(null);
+  const logsWsRef  = useRef(null);
 
-  // Fetch real-time data
-  useEffect(() => {
-    const fetchData = async () => {
+  /* Auto-scroll logs */
+  useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior:'smooth' }); }, [logs]);
+
+  /* ── WebSocket: market tickers ─────────────────────────────── */
+  const connectMarketWs = useCallback(() => {
+    const ws = api.createMarketWS();
+    wsRef.current = ws;
+    ws.onopen  = () => setWsStatus('live');
+    ws.onclose = () => { setWsStatus('reconnecting'); setTimeout(connectMarketWs, 4000); };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (e) => {
       try {
-        const data = await api.getTickers("BTC/USDT,ETH/USDT,SOL/USDT,AAPL,NVDA,TSLA");
-        setTickers(data);
-      } catch (err) {
-        setLogs(l => [...l, { t: new Date().toLocaleTimeString(), tp: 'err', m: `[Error] Failed to fetch prices: ${err.message}` }]);
-      }
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'tickers' && Array.isArray(msg.data)) setTickers(msg.data);
+      } catch {}
     };
-
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    return ws;
   }, []);
 
-  const portVal = 128450.32;
-  const dayPnl = 1240.45;
+  /* ── WebSocket: logs ───────────────────────────────────────── */
+  const connectLogsWs = useCallback(() => {
+    const ws = api.createLogsWS();
+    logsWsRef.current = ws;
+    ws.onclose = () => setTimeout(connectLogsWs, 6000);
+    ws.onerror = () => ws.close();
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        setLogs(prev => [...prev.slice(-199), msg]);
+      } catch {}
+    };
+    return ws;
+  }, []);
+
+  /* ── HTTP fallback for tickers ─────────────────────────────── */
+  const fetchTickers = useCallback(async () => {
+    try {
+      const data = await api.getTickers();
+      setTickers(data);
+      setWsStatus('http');
+    } catch(e) {
+      setLogs(l => [...l, { t: new Date().toLocaleTimeString(), tp:'err', m:`[Error] Market feed: ${e.message}` }]);
+    }
+  }, []);
+
+  /* ── Portfolio polling ─────────────────────────────────────── */
+  const fetchPortfolio = useCallback(async () => {
+    try { setPortfolio(await api.getPortfolio()); } catch {}
+  }, []);
+
+  /* ── Bootstrap ─────────────────────────────────────────────── */
+  useEffect(() => {
+    connectMarketWs();
+    connectLogsWs();
+    fetchTickers();
+    fetchPortfolio();
+
+    // Fallback polling when WS not available
+    const tickerInterval = setInterval(fetchTickers, 8000);
+    const portInterval   = setInterval(fetchPortfolio, 30000);
+
+    return () => {
+      clearInterval(tickerInterval);
+      clearInterval(portInterval);
+      wsRef.current?.close();
+      logsWsRef.current?.close();
+    };
+  }, [connectMarketWs, connectLogsWs, fetchTickers, fetchPortfolio]);
+
+  /* ── Current date string ───────────────────────────────────── */
+  const dateStr = new Date().toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }).toUpperCase();
 
   return (
     <div className="app">
-      {/* Titlebar */}
+      {/* ── Titlebar ─────────────────────────────────────────── */}
       <div className="titlebar">
         <div className="tl">
-          <span className="tc"></span><span className="tm"></span><span className="tx"></span>
+          <span className="tc" /><span className="tm" /><span className="tx" />
         </div>
-        <div className="tb-title">QUANTUM AI · VIBE-TRADING</div>
+        <div className="tb-title">QUANTUM AI · VIBE-TRADING · v2.0</div>
         <div className="tb-right">
-          <span className="sb-ind"><span className="live-dot"></span> LIVE</span>
-          <span>MAY 10, 2026</span>
-          <Database size={12} color="#00ccff" />
+          <div className="sb-ind">
+            <span className="live-dot" />
+            {wsStatus === 'live' ? 'LIVE WS' : wsStatus === 'http' ? 'LIVE HTTP' : wsStatus === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}
+          </div>
+          <span>{dateStr}</span>
+          <Database size={11} color="var(--cyan)" />
         </div>
       </div>
 
       <div className="body">
-        {/* Sidebar */}
+        {/* ── Sidebar ───────────────────────────────────────── */}
         <div className="sidebar">
-          <NavItem id="dash" active={page} label="DASH" icon={LayoutDashboard} onClick={setPage} />
-          <NavItem id="bots" active={page} label="BOTS" icon={Bot} onClick={setPage} />
-          <NavItem id="kronos" active={page} label="KRONOS" icon={BrainCircuit} onClick={setPage} />
-          <NavItem id="news" active={page} label="NEWS" icon={Newspaper} onClick={setPage} />
-          <div style={{ flex: 1 }}></div>
-          <NavItem id="settings" active={page} label="SETUP" icon={Settings} onClick={setPage} />
+          {NAV.map(({ id, label, icon: Icon }) => (
+            <button key={id} className={`nb ${page===id?'act':''}`} onClick={() => setPage(id)} title={label}>
+              <Icon size={18} />
+              <span className="nbl">{label}</span>
+            </button>
+          ))}
+          <div style={{ flex:1 }} />
+          <button className="nb" title="SETTINGS" onClick={() => setPage('settings')}>
+            <Settings size={18} />
+            <span className="nbl">SET</span>
+          </button>
         </div>
 
-        {/* Content Area */}
+        {/* ── Content ──────────────────────────────────────── */}
         <div className="content">
+          {/* Ticker Strip */}
           <div className="ticker-wrap">
             <div className="ticker-inner">
-              {tickers.map(t => (
-                <span key={t.symbol} style={{ marginRight: '24px', fontSize: '10px' }}>
-                  <span style={{ color: '#5a7a95' }}>{t.symbol}</span>
-                  <span style={{ marginLeft: '6px', color: '#c8dde8' }}>${t.price.toLocaleString()}</span>
-                  <span style={{ marginLeft: '6px', color: t.change >= 0 ? '#00ff9f' : '#ff3366' }}>
-                    {t.change >= 0 ? '▲' : '▼'}{Math.abs(t.change).toFixed(2)}%
+              {[...tickers, ...tickers].map((t, i) => (
+                <span key={i} style={{ marginRight:28, fontSize:9.5, display:'inline-flex', alignItems:'center', gap:6 }}>
+                  <span style={{ color:'var(--text2)', letterSpacing:.5 }}>{t.symbol}</span>
+                  <span style={{ color:'var(--text3)', fontFamily:'Orbitron,sans-serif', fontSize:9 }}>
+                    ${t.price?.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+                  </span>
+                  <span style={{ color: t.change>=0?'var(--green)':'var(--red)', fontWeight:700 }}>
+                    {t.change>=0?'▲':'▼'}{Math.abs(t.change||0).toFixed(2)}%
                   </span>
                 </span>
               ))}
             </div>
           </div>
 
-          <div className="page" style={{ padding: '12px' }}>
-            {page === 'dash' && (
-              <div className="col" style={{ gap: '12px' }}>
-                <div className="g4">
-                  <MetricCard label="PORTFOLIO" value={`$${portVal.toLocaleString()}`} color="#00ccff" sub="Total Net Worth" />
-                  <MetricCard label="DAY P&L" value={`+$${dayPnl.toLocaleString()}`} color="#00ff9f" sub="Realized + Unrealized" />
-                  <MetricCard label="ACTIVE BOTS" value="4 / 6" color="#ffaa00" sub="Execution Active" />
-                  <MetricCard label="MARKET BIAS" value="BULLISH" color="#00ff9f" sub="Sentiment Score: 78" />
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '12px', height: '300px' }}>
-                  <div className="panel">
-                    <div className="ph"><span className="ac">■</span> MARKET OVERVIEW</div>
-                    <div className="sc" style={{ flex: 1, padding: '12px' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
-                        <thead>
-                          <tr style={{ color: '#2a3f55', textAlign: 'left', borderBottom: '1px solid #1a2840' }}>
-                            <th style={{ padding: '8px' }}>ASSET</th>
-                            <th style={{ padding: '8px' }}>PRICE</th>
-                            <th style={{ padding: '8px' }}>24H CHG</th>
-                            <th style={{ padding: '8px' }}>CATEGORY</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {tickers.map(t => (
-                            <tr key={t.symbol} style={{ borderBottom: '1px solid #0f1a25' }}>
-                              <td style={{ padding: '8px', fontWeight: 600 }}>{t.symbol}</td>
-                              <td style={{ padding: '8px', color: '#c8dde8' }}>${t.price.toLocaleString()}</td>
-                              <td style={{ padding: '8px', color: t.change >= 0 ? '#00ff9f' : '#ff3366' }}>
-                                {t.change >= 0 ? '+' : ''}{t.change.toFixed(2)}%
-                              </td>
-                              <td style={{ padding: '8px', color: '#2a3f55' }}>{t.category.toUpperCase()}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  <div className="panel">
-                    <div className="ph"><span className="ag">■</span> SYSTEM STATUS</div>
-                    <div className="sc" style={{ flex: 1, padding: '12px' }}>
-                      <div className="col" style={{ gap: '10px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
-                          <span>CPU LOAD</span>
-                          <span style={{ color: '#00ff9f' }}>24%</span>
-                        </div>
-                        <div style={{ height: '2px', background: '#1a2840' }}>
-                          <div style={{ width: '24%', height: '100%', background: '#00ff9f' }}></div>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
-                          <span>MEM USAGE</span>
-                          <span style={{ color: '#00ccff' }}>1.2 GB</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
-                          <span>KRONOS INFERENCE</span>
-                          <span style={{ color: '#ffaa00' }}>READY</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
-                          <span>AGENT-REACH</span>
-                          <span style={{ color: '#00ff9f' }}>CONNECTED</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="panel" style={{ flex: 1, minHeight: '150px' }}>
-                  <div className="ph"><span className="ac">■</span> REAL-TIME LOGS</div>
-                  <div className="sc" style={{ flex: 1 }}>
-                    {logs.map((l, i) => (
-                      <div key={i} className="log-l">
-                        <span className="ts">{l.t}</span>
-                        <span className={`log-${l.tp}`}>{l.m}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {page === 'kronos' && (
-              <div className="col" style={{ gap: '12px', height: '100%' }}>
-                <div className="panel" style={{ flex: 1 }}>
-                  <div className="ph">
-                    <span className="ac">■</span> KRONOS FOUNDATION MODEL · ZERO-SHOT FORECASTING
-                    <button className="btn sm" style={{ marginLeft: 'auto' }}>⚡ RE-CALIBRATE</button>
-                  </div>
-                  <div style={{ flex: 1, padding: '20px' }}>
-                    <div style={{ display: 'flex', gap: '20px', height: '100%' }}>
-                      <div className="col" style={{ width: '200px' }}>
-                         <div style={{ fontSize: '9px', color: '#2a3f55', marginBottom: '8px' }}>MODEL PARAMETERS</div>
-                         <div className="mc" style={{ marginBottom: '8px' }}>
-                            <div className="ml">TEMP</div>
-                            <div className="mv" style={{ fontSize: '12px' }}>0.7</div>
-                         </div>
-                         <div className="mc" style={{ marginBottom: '8px' }}>
-                            <div className="ml">TOP_P</div>
-                            <div className="mv" style={{ fontSize: '12px' }}>0.9</div>
-                         </div>
-                         <div className="mc">
-                            <div className="ml">HORIZON</div>
-                            <div className="mv" style={{ fontSize: '12px' }}>24 BARS</div>
-                         </div>
-                      </div>
-                      <div className="panel" style={{ flex: 1, padding: '12px' }}>
-                         <div style={{ fontSize: '12px', color: '#c8dde8', marginBottom: '12px' }}>BTC/USDT FORECAST BAND</div>
-                         <ResponsiveContainer width="100%" height="80%">
-                            <AreaChart data={Array.from({length: 24}, (_, i) => ({ t: i, p: 97000 + i*10, hi: 97500 + i*10, lo: 96500 + i*10 }))}>
-                              <defs>
-                                <linearGradient id="colorPv" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="5%" stopColor="#00ccff" stopOpacity={0.3}/>
-                                  <stop offset="95%" stopColor="#00ccff" stopOpacity={0}/>
-                                </linearGradient>
-                              </defs>
-                              <XAxis dataKey="t" hide />
-                              <YAxis domain={['auto', 'auto']} hide />
-                              <Tooltip contentStyle={{ background: '#0a1016', border: '1px solid #1a2840' }} />
-                              <Area type="monotone" dataKey="p" stroke="#00ccff" fillOpacity={1} fill="url(#colorPv)" />
-                              <Area type="monotone" dataKey="hi" stroke="none" fill="#00ccff" fillOpacity={0.1} />
-                              <Area type="monotone" dataKey="lo" stroke="none" fill="#00ccff" fillOpacity={0.1} />
-                            </AreaChart>
-                         </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
+          {/* Page Content */}
+          <div className="page">
+            {page === 'dash'      && <Dashboard  tickers={tickers} logs={logs} portfolio={portfolio} />}
+            {page === 'charts'    && <Charts />}
+            {page === 'portfolio' && <Portfolio />}
+            {page === 'bots'      && <Bots />}
+            {page === 'kronos'    && <Kronos />}
+            {page === 'swarm'     && <Swarm />}
+            {page === 'news'      && <News />}
+            {page === 'settings'  && <SettingsPage />}
           </div>
         </div>
       </div>
@@ -247,4 +181,64 @@ function App() {
   );
 }
 
-export default App;
+/* ── Settings Page (inline) ─────────────────────────────────────── */
+function SettingsPage() {
+  const [apiUrl, setApiUrl] = useState('http://localhost:8000');
+  return (
+    <div className="col fade-in" style={{ gap:10, maxWidth:600 }}>
+      <div className="panel">
+        <div className="ph"><span className="ac">■</span> BACKEND CONFIGURATION</div>
+        <div style={{ padding:16, display:'flex', flexDirection:'column', gap:12 }}>
+          {[
+            { label:'API Base URL', val:apiUrl, set:setApiUrl, placeholder:'http://localhost:8000' },
+          ].map(f => (
+            <div key={f.label}>
+              <div style={{ fontSize:8.5, color:'var(--text2)', letterSpacing:1.2, marginBottom:5 }}>{f.label}</div>
+              <input value={f.val} onChange={e=>f.set(e.target.value)} placeholder={f.placeholder}
+                style={{ width:'100%', background:'var(--panel2)', border:'1px solid var(--border2)', color:'var(--text3)', fontFamily:'JetBrains Mono,monospace', fontSize:10, padding:'7px 10px', borderRadius:3, outline:'none' }} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="ph"><span className="ag">■</span> KRONOS MODEL</div>
+        <div style={{ padding:16, display:'flex', flexDirection:'column', gap:8 }}>
+          {[
+            { label:'Model Name', val:'NeoQuasar/Kronos-small' },
+            { label:'Tokenizer', val:'NeoQuasar/Kronos-Tokenizer-base' },
+            { label:'Max Context', val:'512 tokens' },
+            { label:'Device', val:'CPU / CUDA auto-detect' },
+            { label:'Paper', val:'AAAI 2026 — arxiv:2508.02739' },
+          ].map(r => (
+            <div key={r.label} style={{ display:'flex', justifyContent:'space-between', fontSize:10, padding:'6px 0', borderBottom:'1px solid var(--border)' }}>
+              <span style={{ color:'var(--text2)' }}>{r.label}</span>
+              <span style={{ color:'var(--cyan)', fontFamily:'Orbitron,sans-serif', fontSize:9 }}>{r.val}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="ph"><span className="aa">■</span> DATA SOURCES</div>
+        <div style={{ padding:16, display:'flex', flexDirection:'column', gap:8 }}>
+          {[
+            { name:'Binance', status:'CONNECTED', color:'var(--green)', desc:'Crypto OHLCV, real-time tickers via CCXT' },
+            { name:'Yahoo Finance', status:'CONNECTED', color:'var(--green)', desc:'Equity data via yfinance' },
+            { name:'Agent-Reach RSS', status:'ACTIVE', color:'var(--cyan)', desc:'News aggregation from CoinTelegraph, Decrypt, CNBC' },
+            { name:'Vibe-Trading API', status:'READY', color:'var(--orange)', desc:'Swarm analysis engine' },
+          ].map(s => (
+            <div key={s.name} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 0', borderBottom:'1px solid var(--border)' }}>
+              <div style={{ width:7, height:7, borderRadius:'50%', background:s.color, boxShadow:`0 0 6px ${s.color}`, flexShrink:0 }} />
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:10, color:'var(--text3)', fontWeight:600 }}>{s.name}</div>
+                <div style={{ fontSize:8.5, color:'var(--text2)', marginTop:2 }}>{s.desc}</div>
+              </div>
+              <span className="tag" style={{ color:s.color, background:'rgba(255,255,255,0.04)', border:`1px solid ${s.color}30` }}>{s.status}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
