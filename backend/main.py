@@ -41,7 +41,8 @@ def to_json(obj):
     return obj
 
 def df_to_records(df):
-    return [{k: to_json(v) for k, v in row.items()} for row in df.to_dict(orient="records")]
+    import json
+    return json.loads(df.to_json(orient="records", date_format="iso"))
 
 def compute_indicators(df):
     if len(df) < 20: return df

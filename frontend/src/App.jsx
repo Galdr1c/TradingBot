@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LayoutDashboard, BarChart3, Wallet, Bot,
-  BrainCircuit, Newspaper, Users, Settings, Database
+  BrainCircuit, Newspaper, Users, Settings, Database,
+  Minus, Square, X
 } from 'lucide-react';
 import './App.css';
 import * as api from './api';
+
+const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
 
 import Dashboard  from './pages/Dashboard';
 import Charts     from './pages/Charts';
@@ -115,17 +118,28 @@ export default function App() {
     <div className="app">
       {/* ── Titlebar ─────────────────────────────────────────── */}
       <div className="titlebar">
-        <div className="tl">
-          <span className="tc" /><span className="tm" /><span className="tx" />
+        <div style={{ display:'flex', alignItems:'center', gap:10, WebkitAppRegion:'no-drag', width:200 }}>
+          <div style={{ width:24, height:24, borderRadius:6, background:'linear-gradient(135deg, var(--cyan), var(--purple))', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 0 10px rgba(56,189,248,0.5)' }}>
+            <Database size={13} color="#fff" />
+          </div>
+          <div style={{ fontFamily:'var(--font-display)', fontSize:12, fontWeight:700, letterSpacing:1.5, color:'var(--text-bright)' }}>QUANTUM AI</div>
         </div>
-        <div className="tb-title">QUANTUM AI · VIBE-TRADING · v2.0</div>
-        <div className="tb-right">
-          <div className="sb-ind">
+
+        <div className="tb-title">VIBE-TRADING · v2.0</div>
+
+        <div className="tb-right" style={{ width:280, justifyContent:'flex-end', gap:0 }}>
+          <div className="sb-ind" style={{ marginRight:16 }}>
             <span className="live-dot" />
             {wsStatus === 'live' ? 'LIVE WS' : wsStatus === 'http' ? 'LIVE HTTP' : wsStatus === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}
           </div>
-          <span>{dateStr}</span>
-          <Database size={11} color="var(--cyan)" />
+          <span style={{ marginRight:20 }}>{dateStr}</span>
+
+          {/* Windows Controls */}
+          <div style={{ display:'flex', alignItems:'center', height:'100%', WebkitAppRegion:'no-drag', marginRight:-16 }}>
+            <button className="win-btn" onClick={() => ipcRenderer?.send('window-min')}><Minus size={14} /></button>
+            <button className="win-btn" onClick={() => ipcRenderer?.send('window-max')}><Square size={11} /></button>
+            <button className="win-btn close" onClick={() => ipcRenderer?.send('window-close')}><X size={15} /></button>
+          </div>
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const isDev = require('electron-is-dev');
 const { spawn } = require('child_process');
@@ -10,12 +10,14 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
+    minWidth: 1000,
+    minHeight: 600,
     frame: false, // Frameless for custom titlebar
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
-    backgroundColor: '#06090d',
+    backgroundColor: '#030712',
   });
 
   mainWindow.loadURL(
@@ -25,7 +27,7 @@ function createWindow() {
   );
 
   if (isDev) {
-    mainWindow.webContents.openDevTools();
+    // mainWindow.webContents.openDevTools();
   }
 
   mainWindow.on('closed', () => (mainWindow = null));
@@ -33,7 +35,6 @@ function createWindow() {
 
 function startPythonBackend() {
   console.log("Starting Python Backend...");
-  // Start the FastAPI server
   pythonProcess = spawn('python', ['backend/main.py'], {
     stdio: 'inherit'
   });
@@ -64,4 +65,23 @@ app.on('will-quit', () => {
   if (pythonProcess) {
     pythonProcess.kill();
   }
+});
+
+/* IPC Handlers for Custom Titlebar */
+ipcMain.on('window-min', () => {
+  if (mainWindow) mainWindow.minimize();
+});
+
+ipcMain.on('window-max', () => {
+  if (mainWindow) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  }
+});
+
+ipcMain.on('window-close', () => {
+  if (mainWindow) mainWindow.close();
 });
