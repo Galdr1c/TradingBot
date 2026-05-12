@@ -11,6 +11,7 @@ from predictor import KronosPredictor
 from news_agent import NewsAgent
 import ta
 from langchain_core.messages import HumanMessage
+from swarm.orchestrator import SwarmOrchestrator
 
 load_dotenv()
 
@@ -21,8 +22,8 @@ class AgentCore:
         self.news_agent = NewsAgent()
         self.llm = self._init_llm()
         self.tools = self._init_tools()
-        # Using langgraph's prebuilt agent
-        self.agent = self._init_agent()
+        self.orchestrator = SwarmOrchestrator(self.llm)
+        self.agent = self._init_agent("investment_committee")
 
     def _init_llm(self):
         provider = os.getenv("DEFAULT_LLM", "ollama").lower()
@@ -64,16 +65,13 @@ class AgentCore:
         rsi = ta.momentum.RSIIndicator(df['close']).rsi().iloc[-1]
         return f"RSI: {rsi:.2f}"
 
-    def _init_agent(self):
-        # LangGraph prebuilt create_react_agent
-        return create_react_agent(self.llm, self.tools)
+    def _init_agent(self, preset):
+        return self.orchestrator.create_swarm(preset, self.tools)
 
     async def chat(self, message: str):
         try:
-            # LangGraph agent expects a list of messages
             inputs = {"messages": [HumanMessage(content=message)]}
             result = await self.agent.ainvoke(inputs)
-            # Return the last message's content
             return result["messages"][-1].content
         except Exception as e:
             return f"Error: {str(e)}"

@@ -1,0 +1,17 @@
+name: "investment_committee"
+description: "A multi-agent team for deep market analysis and risk management."
+agents:
+  - id: "analyst"
+    role: "Market Analyst"
+    tools: ["GetMarketData", "TechnicalAnalysis"]
+  - id: "news_expert"
+    role: "News Sentiment Analyst"
+    tools: ["AnalyzeNews"]
+  - id: "pm"
+    role: "Portfolio Manager"
+    tools: ["PredictPrice"]
+workflow:
+  - from: "analyst"
+    to: "pm"
+  - from: "news_expert"
+    to: "pm"
