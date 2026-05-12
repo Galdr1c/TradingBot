@@ -25,15 +25,34 @@ export default function Dashboard({ tickers, logs, portfolio }) {
   const [chartData, setChartData] = useState([]);
   const [signal, setSignal] = useState(null);
   const [stats, setStats] = useState(null);
-  const [selectedSym, setSelectedSym] = useState('BTC_USDT');
+  const [prediction, setPrediction] = useState([]);
+  const [newsSentiment, setNewsSentiment] = useState({ sentiment: 'neutral', score: 0 });
+  const [selectedSym, setSelectedSym] = useState('BTC/USDT');
 
   const loadChart = useCallback(async () => {
     try {
-      const data = await api.getHistory(selectedSym, '1h', 48);
-      setChartData(data.slice(-48).map(d => ({
-        t: d.timestamp ? new Date(d.timestamp).getHours() + ':00' : '',
-        p: d.close, v: d.volume, rsi: d.rsi
+      const { data, signal } = await api.getHistory(selectedSym, '1h', 48);
+      setChartData(data.map(d => ({
+        t: new Date(d.timestamp).getHours() + ':00',
+        p: d.close,
+        rsi: d.rsi
       })));
+      setSignal(signal);
+    } catch(e) {}
+  }, [selectedSym]);
+
+  const loadPrediction = useCallback(async () => {
+    try {
+      const { predictions } = await api.getPrediction(selectedSym, 5);
+      setPrediction(predictions);
+    } catch(e) {}
+  }, [selectedSym]);
+
+  const loadNews = useCallback(async () => {
+    try {
+      // Need an endpoint for news sentiment, adding placeholder for now
+      // const n = await api.getNewsSentiment(selectedSym);
+      // setNewsSentiment(n);
     } catch(e) {}
   }, [selectedSym]);
 
@@ -41,11 +60,15 @@ export default function Dashboard({ tickers, logs, portfolio }) {
     try { const s = await api.getSignal(selectedSym); setSignal(s); } catch(e) {}
   }, [selectedSym]);
 
-  const loadStats = useCallback(async () => {
-    try { const s = await api.getSystemStats(); setStats(s); } catch(e) {}
-  }, []);
+  // Update effect to refresh data
+  useEffect(() => { loadChart(); loadPrediction(); loadNews(); loadSignal(); }, [loadChart, loadPrediction, loadNews, loadSignal]);
 
-  useEffect(() => { loadChart(); loadSignal(); loadStats(); }, [loadChart, loadSignal, loadStats]);
+  // Inside return statement, update chart area to include prediction line
+  // (Assuming integration of Recharts Line component)
+  // ...
+  /* In the Chart render: */
+  /* <Area ... /> */
+  /* <Line type="monotone" dataKey="prediction" stroke="var(--purple)" strokeDasharray="5 5" /> */
   useEffect(() => { const id = setInterval(() => { loadChart(); loadSignal(); }, 30000); return () => clearInterval(id); }, [loadChart, loadSignal]);
 
   const portVal = portfolio?.total_value ?? 128450;

@@ -10,9 +10,13 @@ export const getTickers = async (symbols = "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,
     return res.data;
 };
 
-export const getHistory = async (symbol, timeframe = "1h", limit = 200) => {
-    const sym = symbol.replace("/", "_");
-    const res = await api.get(`/market/history/${sym}?timeframe=${timeframe}&limit=${limit}`);
+export const getHistory = async (symbol, interval = "1h", limit = 100) => {
+    const res = await api.get(`/market/history?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`);
+    return res.data;
+};
+
+export const chatWithAgent = async (message) => {
+    const res = await api.post('/agent/chat', { message });
     return res.data;
 };
 
@@ -28,9 +32,13 @@ export const getPrediction = async (symbol, timeframe = "1h", predLen = 24) => {
     return res.data;
 };
 
-export const runSwarm = async (symbol) => {
-    const sym = symbol.replace("/", "_");
-    const res = await api.get(`/swarm/run/${sym}`);
+export const getConfig = async () => {
+    const res = await api.get('/config');
+    return res.data;
+};
+
+export const updateConfig = async (config) => {
+    const res = await api.post('/config', config);
     return res.data;
 };
 

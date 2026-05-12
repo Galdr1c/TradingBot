@@ -14,3 +14,12 @@ statsmodels
 ta
 psutil
 websockets
+langchain
+langchain-community
+langchain-openai
+sqlalchemy
+aiohttp
+beautifulsoup4
+lxml
+excalibur-py
+pydantic-settings

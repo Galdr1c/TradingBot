@@ -1,10 +1,11 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu } = require('electron');
 const path = require('path');
 const isDev = require('electron-is-dev');
 const { spawn } = require('child_process');
 
 let mainWindow;
 let pythonProcess;
+let tray = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -12,12 +13,13 @@ function createWindow() {
     height: 800,
     minWidth: 1000,
     minHeight: 600,
-    frame: false, // Frameless for custom titlebar
+    frame: false,
+    transparent: true,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
-    backgroundColor: '#030712',
+    backgroundColor: '#00000000',
   });
 
   mainWindow.loadURL(
@@ -26,17 +28,24 @@ function createWindow() {
       : `file://${path.join(__dirname, 'frontend/dist/index.html')}`
   );
 
-  if (isDev) {
-    // mainWindow.webContents.openDevTools();
-  }
-
   mainWindow.on('closed', () => (mainWindow = null));
+}
+
+function createTray() {
+  tray = new Tray(path.join(__dirname, 'frontend/public/favicon.svg'));
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Show App', click: () => mainWindow.show() },
+    { label: 'Quit', click: () => app.quit() }
+  ]);
+  tray.setToolTip('QuantumAI TradingBot');
+  tray.setContextMenu(contextMenu);
 }
 
 function startPythonBackend() {
   console.log("Starting Python Backend...");
   pythonProcess = spawn('python', ['backend/main.py'], {
-    stdio: 'inherit'
+    stdio: 'inherit',
+    env: { ...process.env, PYTHONUNBUFFERED: '1' }
   });
 
   pythonProcess.on('error', (err) => {
@@ -47,17 +56,12 @@ function startPythonBackend() {
 app.on('ready', () => {
   startPythonBackend();
   createWindow();
+  createTray();
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
-  }
-});
-
-app.on('activate', () => {
-  if (mainWindow === null) {
-    createWindow();
   }
 });
 
@@ -67,21 +71,9 @@ app.on('will-quit', () => {
   }
 });
 
-/* IPC Handlers for Custom Titlebar */
-ipcMain.on('window-min', () => {
-  if (mainWindow) mainWindow.minimize();
-});
-
+ipcMain.on('window-min', () => mainWindow?.minimize());
 ipcMain.on('window-max', () => {
-  if (mainWindow) {
-    if (mainWindow.isMaximized()) {
-      mainWindow.unmaximize();
-    } else {
-      mainWindow.maximize();
-    }
-  }
+  if (mainWindow?.isMaximized()) mainWindow.unmaximize();
+  else mainWindow?.maximize();
 });
-
-ipcMain.on('window-close', () => {
-  if (mainWindow) mainWindow.close();
-});
+ipcMain.on('window-close', () => mainWindow?.close());
