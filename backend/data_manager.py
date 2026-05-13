@@ -41,6 +41,12 @@ class DataManager:
         conn.commit()
         conn.close()
 
+    def _normalize_interval(self, interval: str) -> str:
+        """Ensure interval is in a format Binance understands (e.g., 5 -> 5m, 1h -> 1h)."""
+        if interval.isdigit():
+            return f"{interval}m"
+        return interval
+
     async def get_ohlcv(self, symbol: str, interval: str = '1h', limit: int = 100):
         """
         Get OHLCV data with fallback logic:
@@ -48,11 +54,14 @@ class DataManager:
         2. Try Binance (CCXT)
         3. Try yfinance (Fallback)
         """
+        interval = self._normalize_interval(interval)
+        # Normalize symbol for consistency (e.g., BTC_USDT -> BTC/USDT)
+        original_symbol = symbol
+        symbol = symbol.replace('_', '/')
+
         # 1. Try Cache first
         cached_data = self._get_from_cache(symbol, interval, limit)
         if not cached_data.empty and len(cached_data) >= limit:
-            # Check if last record is fresh (e.g., within the last interval)
-            # For simplicity in MVP, we return cache if enough, but in Prod we'd check TTL
             return cached_data
 
         # 2. Try Binance
@@ -74,16 +83,20 @@ class DataManager:
             yf_sym = symbol.replace('/', '-')
             if '-' not in yf_sym and 'USDT' in yf_sym:
                 yf_sym = yf_sym.replace('USDT', '-USD')
+            elif '-' not in yf_sym and 'USDC' in yf_sym:
+                yf_sym = yf_sym.replace('USDC', '-USD')
             
             ticker = yf.Ticker(yf_sym)
             # Map intervals
             yf_interval = '1h' if interval == '1h' else '1d' if interval == '1d' else '1m'
-            df_yf = ticker.history(period='5d', interval=yf_interval).tail(limit)
+            df_yf = ticker.history(period='1mo', interval=yf_interval).tail(limit)
             
             if not df_yf.empty:
                 df_yf = df_yf.reset_index()
+                # yfinance might use 'Date' or 'Datetime'
+                time_col = 'Date' if 'Date' in df_yf.columns else 'Datetime'
                 df_yf = df_yf.rename(columns={
-                    'Date': 'timestamp', 'Datetime': 'timestamp',
+                    time_col: 'timestamp',
                     'Open': 'open', 'High': 'high', 'Low': 'low', 
                     'Close': 'close', 'Volume': 'volume'
                 })

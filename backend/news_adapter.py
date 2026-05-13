@@ -38,16 +38,50 @@ class JinaReaderAdapter(BaseAdapter):
                     logger.error(f"Jina fetch failed for {url}: {e}")
         return articles
 
+class RSSAdapter(BaseAdapter):
+    """Fetches news from RSS feeds."""
+    def __init__(self, feeds: list):
+        self.feeds = feeds
+
+    def check_health(self):
+        return True
+
+    async def fetch(self, symbol: str):
+        articles = []
+        for feed_url in self.feeds:
+            try:
+                feed = feedparser.parse(feed_url)
+                for entry in feed.entries:
+                    title = entry.get('title', '')
+                    summary = entry.get('summary', entry.get('description', ''))
+                    if symbol.lower() in title.lower() or symbol.lower() in summary.lower() or symbol == "crypto":
+                        articles.append({
+                            "title": title,
+                            "summary": summary[:500],
+                            "url": entry.get('link', ''),
+                            "source": feed_url
+                        })
+            except Exception as e:
+                logger.error(f"RSS fetch failed for {feed_url}: {e}")
+        return articles
+
 class NewsOrchestrator:
     def __init__(self):
-        self.sources = [
+        self.jina_sources = [
             "https://www.bloomberg.com/crypto",
             "https://www.reuters.com/markets/crypto/",
             "https://cointelegraph.com/",
             "https://decrypt.co/"
         ]
+        self.rss_sources = [
+            "https://cointelegraph.com/rss",
+            "https://www.coindesk.com/arc/outboundfeeds/rss/",
+            "https://cryptoslate.com/feed/",
+            "https://bitcoinmagazine.com/.rss/full/"
+        ]
         self.adapters = {
-            "jina": JinaReaderAdapter(self.sources),
+            "rss": RSSAdapter(self.rss_sources),
+            "jina": JinaReaderAdapter(self.jina_sources),
         }
 
     async def get_all_news(self, symbol: str):

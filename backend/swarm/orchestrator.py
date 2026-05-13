@@ -5,7 +5,7 @@ from langgraph.prebuilt import create_react_agent
 class SwarmOrchestrator:
     def __init__(self, llm):
         self.llm = llm
-        self.presets_dir = "backend/swarm/presets"
+        self.presets_dir = os.path.join(os.path.dirname(__file__), "presets")
 
     def load_preset(self, preset_name):
         path = os.path.join(self.presets_dir, f"{preset_name}.yaml")

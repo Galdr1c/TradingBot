@@ -7,8 +7,6 @@ import {
 import './App.css';
 import * as api from './api';
 
-const ipcRenderer = window.require ? window.require('electron').ipcRenderer : null;
-
 import Dashboard  from './pages/Dashboard';
 import Charts     from './pages/Charts';
 import Portfolio  from './pages/Portfolio';

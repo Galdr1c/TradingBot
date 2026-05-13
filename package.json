@@ -1,15 +1,11 @@
 {
   "name": "quantum-ai-trading-bot",
   "version": "2.0.0",
-  "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "concurrently \"cd frontend && npm run dev\" \"wait-on http://localhost:5173 && npm start\"",
+    "dev": "concurrently \"cd backend && python main.py\" \"cd frontend && npm run dev\"",
     "install-all": "npm install && cd frontend && npm install && cd ../backend && pip install -r requirements.txt"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2",
-    "electron": "^28.2.0",
-    "wait-on": "^9.0.6"
+    "concurrently": "^8.2.2"
   }
 }

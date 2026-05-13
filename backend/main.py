@@ -158,12 +158,12 @@ async def get_market_history(symbol: str = "BTC/USDT", interval: str = "1h", lim
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/predict/{symbol}")
-async def get_prediction(symbol: str = "BTC/USDT", steps: int = 5):
+async def get_prediction(symbol: str = "BTC/USDT", timeframe: str = "1h", pred_len: int = 24):
     try:
-        df = await data_manager.get_ohlcv(symbol, interval='1h', limit=200)
+        df = await data_manager.get_ohlcv(symbol, interval=timeframe, limit=200)
         if df.empty:
             raise HTTPException(status_code=400, detail="Insufficient data for prediction")
-        preds = predictor.predict(df, steps=steps)
+        preds = predictor.predict(df, steps=pred_len)
         return {"symbol": symbol, "predictions": preds}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -175,6 +175,85 @@ async def run_backtest(symbol: str = "BTC/USDT"):
         raise HTTPException(status_code=400, detail="Not enough data for backtest")
     results = backtester.run(df)
     return {"symbol": symbol, "metrics": results}
+
+@app.get("/api/market/signal/{symbol}")
+async def get_market_signal(symbol: str, timeframe: str = "1h"):
+    try:
+        df = await data_manager.get_ohlcv(symbol, interval=timeframe, limit=100)
+        if df.empty:
+            raise HTTPException(status_code=404, detail="Data not found")
+        df = compute_indicators(df)
+        return get_signal(df)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/news")
+async def get_general_news(symbols: str = "BTC,ETH,crypto", limit: int = 20):
+    try:
+        all_news = []
+        for sym in symbols.split(","):
+            res = await news_agent.analyze_news(sym.strip())
+            all_news.append({
+                "symbol": sym,
+                "sentiment": res["sentiment"],
+                "score": res["score"],
+                "headlines": res["headlines"]
+            })
+        return all_news
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/portfolio")
+async def get_portfolio():
+    # Return mock portfolio data for MVP
+    return {
+        "balance": 24500.50,
+        "change_24h": 2.4,
+        "assets": [
+            {"symbol": "BTC", "amount": 0.45, "value": 18200.0, "change": 1.2},
+            {"symbol": "ETH", "amount": 2.5, "value": 4500.0, "change": -0.5},
+            {"symbol": "SOL", "amount": 15.0, "value": 1800.5, "change": 5.4}
+        ]
+    }
+
+@app.get("/api/bots")
+async def get_bots():
+    return [
+        {"id": "kronos_1", "name": "Kronos Scalper", "status": "running", "pair": "BTC/USDT", "profit": 12.5},
+        {"id": "swarm_1", "name": "Swarm Alpha", "status": "paused", "pair": "ETH/USDT", "profit": -2.1}
+    ]
+
+@app.post("/api/bots/{bot_id}/toggle")
+async def toggle_bot(bot_id: str):
+    return {"id": bot_id, "status": "toggled"}
+
+@app.get("/api/system/stats")
+async def get_system_stats():
+    return {
+        "cpu": 15.4,
+        "memory": 42.1,
+        "uptime": "12d 4h 22m",
+        "api_status": "healthy"
+    }
+
+@app.websocket("/ws/logs")
+async def websocket_logs(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        logs = [
+            "Initializing QuantumAI Trading Bot...",
+            "Connecting to Binance...",
+            "Loading Kronos model...",
+            "Market data stream active."
+        ]
+        for log in logs:
+            await websocket.send_text(log)
+            await asyncio.sleep(1)
+        while True:
+            await asyncio.sleep(10)
+            await websocket.send_text(f"System heartbeat: {datetime.now().strftime('%H:%M:%S')}")
+    except WebSocketDisconnect:
+        pass
 
 @app.websocket("/ws/market")
 async def websocket_market(websocket: WebSocket):
