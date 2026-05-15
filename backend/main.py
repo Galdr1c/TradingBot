@@ -1,5 +1,5 @@
 """
-QuantumAI TradingBot Backend — v3.1
+QuantumAI TradingBot Backend — v3.3
 Integrates: Kronos forecasting · Vibe-Trading swarm · OpenTrader strategies (GRID/DCA/RSI)
 """
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -14,6 +14,9 @@ from agents import (TradingSwarm, _rsi_wilder, _macd, _adx,
 from candles import add_candlestick_columns
 from news_agent import NewsAgent
 from backtest_engine import BacktestEngine
+from research_adapter import ResearchAdapter
+from correlation_engine import CorrelationEngine
+from risk_engine import RiskEngine
 import opentrader_bridge as ot
 import ta
 
@@ -25,6 +28,9 @@ predictor    = KronosPredictor()
 swarm        = TradingSwarm()
 news_agent   = NewsAgent()
 backtester   = BacktestEngine()
+research     = ResearchAdapter()
+correlator   = CorrelationEngine()
+risk_engine  = RiskEngine()
 
 try:
     from agent_core import AgentCore
@@ -33,7 +39,7 @@ except Exception as e:
     logger.warning(f"AgentCore: {e}")
     agent_core = None
 
-app = FastAPI(title="QuantumAI TradingBot API", version="3.1.0")
+app = FastAPI(title="QuantumAI TradingBot API", version="3.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -415,6 +421,61 @@ async def get_signal(symbol: str, timeframe: str = "1h"):
         logger.exception("signal endpoint recovered for %s %s", sym, timeframe)
         return _sanitize({"signal": "NEUTRAL", "confidence": 35, "reasons": [f"Signal unavailable: {e}"], "score": 0})
 
+@app.get("/api/market/decision/{symbol}")
+async def get_market_decision(symbol: str, timeframes: str = "15m,1h,4h,1d"):
+    """Multi-timeframe signal consensus inspired by Vibe-Trading validation guardrails.
+
+    The endpoint combines fast and slow timeframes instead of trusting a single
+    indicator snapshot. It returns a conservative confidence if timeframes disagree.
+    """
+    sym = _sym(symbol)
+    tfs = [t.strip() for t in str(timeframes or "1h").split(",") if t.strip()]
+    tfs = tfs[:6] or ["1h"]
+    weight_map = {"1m": 0.08, "5m": 0.10, "15m": 0.15, "30m": 0.18, "1h": 0.30, "4h": 0.25, "1d": 0.25, "1w": 0.15}
+    frames = []
+    total_w = 0.0
+    weighted = 0.0
+    confs = []
+    last_risk = None
+    for tf in tfs:
+        try:
+            df = await data_manager.get_ohlcv(sym, interval=tf, limit=260)
+            sig = _signal(_compute_indicators(df))
+            score = float(sig.get("score", 0) or 0)
+            w = float(weight_map.get(tf, 0.15))
+            weighted += score * w
+            total_w += w
+            confs.append(float(sig.get("confidence", 50) or 50))
+            last_risk = sig.get("risk") or last_risk
+            frames.append({"timeframe": tf, "signal": sig.get("signal"), "confidence": sig.get("confidence"), "score": round(score, 4), "quality": sig.get("quality", {})})
+        except Exception as exc:
+            frames.append({"timeframe": tf, "signal": "ERROR", "confidence": 0, "score": 0, "error": str(exc)})
+    consensus_score = weighted / (total_w or 1)
+    bullish = sum(1 for f in frames if "BUY" in str(f.get("signal")))
+    bearish = sum(1 for f in frames if "SELL" in str(f.get("signal")))
+    disagreement = bullish > 0 and bearish > 0
+    if consensus_score >= 0.55 and not disagreement:
+        signal, base_conf = "STRONG BUY", 84
+    elif consensus_score >= 0.25:
+        signal, base_conf = "BUY", 68
+    elif consensus_score <= -0.55 and not disagreement:
+        signal, base_conf = "STRONG SELL", 82
+    elif consensus_score <= -0.25:
+        signal, base_conf = "SELL", 66
+    else:
+        signal, base_conf = "NEUTRAL", 52
+    avg_conf = sum(confs) / len(confs) if confs else 50
+    confidence = int(max(35, min(92, (base_conf * 0.65 + avg_conf * 0.35) - (12 if disagreement else 0))))
+    reasons = []
+    if disagreement:
+        reasons.append("Timeframes disagree; confidence reduced")
+    reasons.append(f"Consensus score {consensus_score:.3f} across {len(frames)} timeframe(s)")
+    if bullish:
+        reasons.append(f"Bullish frames: {bullish}")
+    if bearish:
+        reasons.append(f"Bearish frames: {bearish}")
+    return _sanitize({"symbol": sym, "signal": signal, "confidence": confidence, "score": round(consensus_score, 4), "frames": frames, "risk": last_risk, "reasons": reasons, "timestamp": datetime.utcnow().isoformat()})
+
 @app.get("/api/predict/{symbol}")
 async def get_prediction(symbol: str, timeframe: str = "1h", pred_len: int = 24):
     try:
@@ -435,13 +496,29 @@ async def get_prediction(symbol: str, timeframe: str = "1h", pred_len: int = 24)
     except Exception as e: raise HTTPException(500, str(e))
 
 @app.get("/api/backtest/run")
-async def run_backtest_py(symbol: str = "BTC/USDT"):
+async def run_backtest_py(symbol: str = "BTC/USDT", strategy: str = "rsi", interval: str = "1h", limit: int = 700,
+                          initial_cash: float = 10000, fee_bps: float = 8, slippage_bps: float = 3,
+                          max_position_pct: float = 95):
     try:
-        df = await data_manager.get_ohlcv(_sym(symbol), interval="1h", limit=500)
+        sym = _sym(symbol)
+        df = await data_manager.get_ohlcv(sym, interval=interval, limit=max(120, min(int(limit or 700), 1500)))
         if df.empty: raise HTTPException(400, "Not enough data")
-        return {"symbol": _sym(symbol), **backtester.run(df)}
+        cfg = {"initial_cash": initial_cash, "fee_bps": fee_bps, "slippage_bps": slippage_bps, "max_position_pct": max_position_pct}
+        return _sanitize({"symbol": sym, "interval": interval, **backtester.run(df, strategy=strategy, config=cfg, interval=interval)})
     except HTTPException: raise
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e:
+        logger.exception("backtest endpoint failed")
+        raise HTTPException(500, str(e))
+
+@app.get("/api/backtest/validate")
+async def validate_backtest(symbol: str = "BTC/USDT", strategy: str = "rsi", interval: str = "1h", limit: int = 1000, folds: int = 4):
+    try:
+        sym = _sym(symbol)
+        df = await data_manager.get_ohlcv(sym, interval=interval, limit=max(240, min(int(limit or 1000), 1500)))
+        return _sanitize({"symbol": sym, "interval": interval, **backtester.walk_forward(df, strategy=strategy, interval=interval, folds=folds)})
+    except Exception as e:
+        logger.exception("walk-forward validation failed")
+        raise HTTPException(500, str(e))
 
 # ── News ─────────────────────────────────────────────────────────────────────
 
@@ -580,6 +657,43 @@ async def ot_backtest(data: Dict[str,Any]):
         data.get("timeframe","1h"),  data.get("from_date","2024-01-01"),
         data.get("to_date","2024-06-01"), data.get("params",{}))
 
+# ── Research / validation lab ─────────────────────────────────────────────────
+
+@app.get("/api/research/status")
+async def research_status():
+    return research.status()
+
+@app.get("/api/research/briefing")
+async def research_briefing(query: str = "crypto stocks", limit: int = 12):
+    return await research.rss_briefing(query=query, limit=limit)
+
+@app.get("/api/research/read")
+async def research_read(url: str):
+    return await research.read_url(url)
+
+@app.get("/api/research/github")
+async def research_github(repo: str = "HKUDS/Vibe-Trading"):
+    return await research.github_repo(repo)
+
+@app.get("/api/portfolio/correlation")
+async def portfolio_correlation(symbols: str = "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,AAPL,NVDA,TSLA,MSFT", interval: str = "1d", lookback: int = 120):
+    frames = {}
+    for s in [x.strip() for x in symbols.split(",") if x.strip()][:12]:
+        try:
+            frames[_sym(s)] = await data_manager.get_ohlcv(_sym(s), interval=interval, limit=max(30, min(int(lookback or 120), 400)))
+        except Exception as exc:
+            logger.warning("Correlation skipped %s: %s", s, exc)
+    return _sanitize(correlator.compute(frames, lookback=lookback))
+
+@app.get("/api/risk/position-size")
+async def risk_position_size(symbol: str = "BTC/USDT", interval: str = "1h", account_equity: float = 10000, risk_pct: float = 1, atr_mult: float = 2, max_alloc_pct: float = 25):
+    sym = _sym(symbol)
+    try:
+        df = await data_manager.get_ohlcv(sym, interval=interval, limit=180)
+        return _sanitize({"symbol": sym, "interval": interval, **risk_engine.position_size(df, account_equity, risk_pct, atr_mult, max_alloc_pct)})
+    except Exception as exc:
+        return _sanitize({"symbol": sym, "ok": False, "error": str(exc)})
+
 # ── System stats ──────────────────────────────────────────────────────────────
 
 @app.get("/api/system/stats")
@@ -591,18 +705,18 @@ async def sys_stats():
         return {"cpu":round(cpu,1),"memory_pct":round(mem.percent,1),
                 "memory_used_gb":round(mem.used/1e9,2),
                 "kronos_status":"READY" if predictor.is_ready else "FALLBACK",
-                "agent_reach_status":"CONNECTED","swarm_status":"ACTIVE",
+                "research_status":"READY","agent_reach_status":"LOCAL ADAPTER","swarm_status":"ACTIVE",
                 "opentrader_status":"LIVE" if ot.is_available() else "SIMULATION"}
     except Exception:
         return {"cpu":0,"memory_pct":0,"memory_used_gb":0,"kronos_status":"READY",
-                "agent_reach_status":"CONNECTED","swarm_status":"ACTIVE","opentrader_status":"SIMULATION"}
+                "research_status":"READY","agent_reach_status":"LOCAL ADAPTER","swarm_status":"ACTIVE","opentrader_status":"SIMULATION"}
 
 # ── WebSockets ────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/logs")
 async def ws_logs(ws: WebSocket):
     await ws.accept()
-    boot = [("ok","[System]     QuantumAI v3.1 online"),("info","[Data]       Binance + yfinance connected"),
+    boot = [("ok","[System]     QuantumAI v3.3 online"),("info","[Data]       Binance + yfinance connected"),
             ("ai","[Kronos]     Foundation model ready"),("ok","[Swarm]      4 agents initialised"),
             ("info","[OpenTrader] GRID · DCA · RSI strategies loaded"),
             ("ok","[Indicators] Wilder RSI · MACD · ADX · Williams %R active")]

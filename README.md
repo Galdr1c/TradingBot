@@ -238,3 +238,29 @@ python -m py_compile backend/*.py backend/swarm/*.py
 - `backend/data_manager.py` yeniden yazıldı: WAL cache, per-symbol lock, provider fallback ve demo fallback.
 - `backend/main.py` sinyal motoru volatilite/hacim/VWAP/risk ve data-quality alanlarıyla güçlendirildi.
 - Frontend build, frontend lint ve Python syntax kontrolleri çalıştırıldı.
+
+## v3.3 Research, Risk & Validation Upgrade
+
+This build adds a deeper research and validation layer inspired by Vibe-Trading, Agent-Reach, Kronos and OpenTrader ideas while keeping the implementation local to this project.
+
+### New pages
+
+- **Research**: RSS market briefing, public GitHub repo inspection, source health check and safe URL reader.
+- **Risk Lab**: cross-asset correlation heatmap, ATR position sizing, advanced backtest metrics and walk-forward validation.
+- **Charts**: multi-timeframe consensus added on top of the existing technical/mum analysis.
+
+### New backend endpoints
+
+- `GET /api/market/decision/{symbol}` — multi-timeframe signal consensus.
+- `GET /api/research/status` — research adapter/source status.
+- `GET /api/research/briefing` — RSS-based market briefing.
+- `GET /api/research/github` — public GitHub repo intelligence.
+- `GET /api/research/read` — safe URL reader.
+- `GET /api/portfolio/correlation` — return correlation matrix.
+- `GET /api/risk/position-size` — ATR-based position sizing.
+- `GET /api/backtest/validate` — walk-forward validation.
+
+### Reliability policy
+
+The application should not expose dead UI controls: every new button calls an implemented API endpoint and every endpoint returns a handled success/error payload. External data failures are displayed as warnings instead of crashing the UI.
+

@@ -16,6 +16,8 @@ import Kronos from './pages/Kronos';
 import News from './pages/News';
 import Swarm from './pages/Swarm';
 import Strategies from './pages/Strategies';
+import Research from './pages/Research';
+import RiskLab from './pages/RiskLab';
 
 const NAV = [
   { id: 'dash', label: 'Dashboard', short: 'DASH', icon: LayoutDashboard, desc: 'Portföy, piyasa ve sistem özeti' },
@@ -26,6 +28,8 @@ const NAV = [
   { id: 'swarm', label: 'Swarm', short: 'SWARM', icon: Users, desc: 'Çok ajanlı karar motoru' },
   { id: 'strategies', label: 'Strategies', short: 'STRAT', icon: GitBranch, desc: 'GRID, DCA ve RSI stratejileri' },
   { id: 'news', label: 'News', short: 'NEWS', icon: Newspaper, desc: 'Piyasa haberleri ve duyarlılık' },
+  { id: 'research', label: 'Research', short: 'R&D', icon: Search, desc: 'Repo, haber, URL ve araştırma otomasyonu' },
+  { id: 'risklab', label: 'Risk Lab', short: 'RISK', icon: ShieldCheck, desc: 'Korelasyon, pozisyon boyutu ve walk-forward doğrulama' },
 ];
 
 const PAGE_META = [
@@ -66,7 +70,7 @@ function AppCore() {
   const [tickers, setTickers] = useState([]);
   const [portfolio, setPortfolio] = useState(null);
   const [logs, setLogs] = useState([
-    { t: '--:--:--', tp: 'ok', m: '[System] QuantumAI Trading Engine v3.2 starting...' },
+    { t: '--:--:--', tp: 'ok', m: '[System] QuantumAI Trading Engine v3.3 starting...' },
     { t: '--:--:--', tp: 'info', m: '[Data] Connecting to market feeds...' },
   ]);
   const [wsStatus, setWsStatus] = useState('connecting');
@@ -162,7 +166,7 @@ function AppCore() {
           <div className="brand-mark"><Database size={18} /></div>
           <div>
             <div className="brand-title">Quantum AI</div>
-            <div className="brand-sub">Trading Studio v3.2</div>
+            <div className="brand-sub">Trading Studio v3.3</div>
           </div>
         </div>
 
@@ -217,6 +221,8 @@ function AppCore() {
             {page === 'swarm' && <Swarm />}
             {page === 'strategies' && <Strategies />}
             {page === 'news' && <News />}
+            {page === 'research' && <Research />}
+            {page === 'risklab' && <RiskLab />}
             {page === 'settings' && <SettingsPage onSaved={() => { fetchTickers(); fetchPortfolio(); }} />}
           </ErrorBoundary>
         </main>

@@ -119,3 +119,33 @@ export const chatWithAgent = async (message) =>
 // ── WebSockets ───────────────────────────────────────────────────────────────
 export const createMarketWS = () => new WebSocket(`${wsBaseFromApi()}/ws/market`);
 export const createLogsWS = () => new WebSocket(`${wsBaseFromApi()}/ws/logs`);
+
+// ── v3.3 Research / Risk / Validation Lab ───────────────────────────────────
+export const getMarketDecision = async (symbol, timeframes = '15m,1h,4h,1d') => {
+  const sym = String(symbol || 'BTC/USDT').replace('/', '_');
+  return request(async () => (await api.get(`/market/decision/${encodeURIComponent(sym)}`, { params: { timeframes } })).data, { retries: 1 });
+};
+
+export const getResearchStatus = async () =>
+  request(async () => (await api.get('/research/status')).data, { retries: 1 });
+
+export const getResearchBriefing = async (query = 'crypto stocks', limit = 12) =>
+  request(async () => (await api.get('/research/briefing', { params: { query, limit } })).data, { retries: 1 });
+
+export const readResearchUrl = async (url) =>
+  request(async () => (await api.get('/research/read', { params: { url } })).data, { retries: 0 });
+
+export const inspectGithubRepo = async (repo = 'HKUDS/Vibe-Trading') =>
+  request(async () => (await api.get('/research/github', { params: { repo } })).data, { retries: 1 });
+
+export const getCorrelation = async (symbols = DEFAULT_SYMBOLS, interval = '1d', lookback = 120) =>
+  request(async () => (await api.get('/portfolio/correlation', { params: { symbols, interval, lookback } })).data, { retries: 1 });
+
+export const getPositionSize = async (symbol, interval = '1h', account_equity = 10000, risk_pct = 1, atr_mult = 2, max_alloc_pct = 25) =>
+  request(async () => (await api.get('/risk/position-size', { params: { symbol, interval, account_equity, risk_pct, atr_mult, max_alloc_pct } })).data, { retries: 1 });
+
+export const validateBacktest = async (symbol, strategy = 'rsi', interval = '1h', limit = 1000, folds = 4) =>
+  request(async () => (await api.get('/backtest/validate', { params: { symbol, strategy, interval, limit, folds } })).data, { retries: 1 });
+
+export const runAdvancedBacktest = async (symbol, strategy = 'rsi', interval = '1h', limit = 700, options = {}) =>
+  request(async () => (await api.get('/backtest/run', { params: { symbol, strategy, interval, limit, ...options } })).data, { retries: 1 });

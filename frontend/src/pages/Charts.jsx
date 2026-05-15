@@ -20,6 +20,7 @@ export default function Charts({ externalSymbol }) {
   const [tf, setTf] = useState('1h');
   const [data, setData] = useState([]);
   const [signal, setSignal] = useState(null);
+  const [decision, setDecision] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('price');
@@ -32,6 +33,7 @@ export default function Charts({ externalSymbol }) {
     setLoading(true); setError(null);
     try {
       const [histRes, sig] = await Promise.all([api.getHistory(symbol, tf, 240), api.getSignal(symbol, tf)]);
+      api.getMarketDecision(symbol, '15m,1h,4h,1d').then(setDecision).catch(() => setDecision(null));
       const rows = Array.isArray(histRes?.data) ? histRes.data : [];
       const mapped = rows.map(d => ({
         t: d.timestamp ? new Date(d.timestamp).toLocaleString('tr-TR', { day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '',
@@ -47,7 +49,7 @@ export default function Charts({ externalSymbol }) {
       setSignal(sig || histRes?.signal || null);
       if (histRes?.error) notify(histRes.error, 'error');
     } catch (e) {
-      setError(e); setData([]); setSignal(null); notify(`Grafik yüklenemedi: ${e.message}`, 'error');
+      setError(e); setData([]); setSignal(null); setDecision(null); notify(`Grafik yüklenemedi: ${e.message}`, 'error');
     } finally { setLoading(false); }
   }, [symbol, tf, notify]);
 
@@ -99,6 +101,11 @@ export default function Charts({ externalSymbol }) {
         <div className="risk-card"><span>Stop Loss</span><strong>${fmt(signal.risk.stop_loss)}</strong></div>
         <div className="risk-card"><span>Take Profit</span><strong>${fmt(signal.risk.take_profit)}</strong></div>
         <div className="risk-card"><span>ATR</span><strong>{fmt(signal.risk.atr_pct, 2)}%</strong></div>
+      </div>}
+
+      {decision && <div className="mtf-strip">
+        <div className="mtf-summary"><span>MULTI-TIMEFRAME</span><strong style={{ color: decision.signal?.includes('BUY') ? 'var(--green)' : decision.signal?.includes('SELL') ? 'var(--red)' : 'var(--orange)' }}>{decision.signal} · {decision.confidence}%</strong><em>{decision.reasons?.[0]}</em></div>
+        <div className="mtf-frames">{(decision.frames || []).map(f => <div key={f.timeframe} className="mtf-frame"><span>{f.timeframe}</span><strong className={String(f.signal).includes('BUY') ? 'pos' : String(f.signal).includes('SELL') ? 'neg' : ''}>{f.signal}</strong><small>{f.confidence}%</small></div>)}</div>
       </div>}
 
       <div className="panel" style={{ flex: 1, minHeight: 360 }}>
