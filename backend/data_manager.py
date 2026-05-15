@@ -20,7 +20,15 @@ class DataManager:
         })
 
     def _init_db(self):
-        """Initialize SQLite database for OHLCV caching."""
+        """Initialize and migrate SQLite OHLCV cache.
+
+        Older releases created the table without the `interval` / `source`
+        columns. SQLite keeps that old shape when CREATE TABLE IF NOT EXISTS
+        runs, which can later cause intermittent 500 responses on history and
+        signal endpoints. The migration below is intentionally defensive so
+        existing users can install this update over their current D:/TradingBot
+        folder without deleting market_data.db.
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute(
@@ -33,12 +41,19 @@ class DataManager:
                 low REAL,
                 close REAL,
                 volume REAL,
-                source TEXT,
-                interval TEXT,
+                source TEXT DEFAULT 'unknown',
+                interval TEXT DEFAULT '1h',
                 PRIMARY KEY (symbol, timestamp, interval)
             )
             """
         )
+        cursor.execute("PRAGMA table_info(ohlcv)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "source" not in columns:
+            cursor.execute("ALTER TABLE ohlcv ADD COLUMN source TEXT DEFAULT 'unknown'")
+        if "interval" not in columns:
+            cursor.execute("ALTER TABLE ohlcv ADD COLUMN interval TEXT DEFAULT '1h'")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_symbol_interval_time ON ohlcv(symbol, interval, timestamp)")
         conn.commit()
         conn.close()
 
@@ -211,10 +226,14 @@ class DataManager:
         try:
             query = "SELECT * FROM ohlcv WHERE symbol = ? AND interval = ? ORDER BY timestamp DESC LIMIT ?"
             df = pd.read_sql(query, conn, params=(symbol, interval, int(limit)))
+        except sqlite3.DatabaseError as e:
+            logger.warning(f"Cache read skipped for {symbol} {interval}: {e}")
+            return pd.DataFrame()
         finally:
             conn.close()
         if not df.empty:
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+            df = df.dropna(subset=["timestamp", "open", "high", "low", "close"])
             return df.sort_values("timestamp")
         return pd.DataFrame()
 

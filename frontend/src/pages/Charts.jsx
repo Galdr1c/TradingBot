@@ -105,7 +105,7 @@ export default function Charts() {
       </div>
 
       {/* Indicator badges — now includes ADX, Williams %R, VWAP */}
-      <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:2 }}>
+      <div className="indicator-grid">
         {[
           { label:'RSI',        value: last.rsi?.toFixed(1),       color: last.rsi < 30 ? 'var(--green)' : last.rsi > 70 ? 'var(--red)' : 'var(--cyan)' },
           { label:'MACD',       value: last.macd?.toFixed(3),      color: last.macd > 0 ? 'var(--green)' : 'var(--red)' },
@@ -142,8 +142,8 @@ export default function Charts() {
           )}
         </div>
 
-        <div className="chart-area" style={{ padding:'8px 4px' }}>
-          <ResponsiveContainer width="100%" height={260}>
+        <div className="chart-area">
+          <ResponsiveContainer width="100%" height="100%">
             {tab === 'price' ? (
               <AreaChart data={data} margin={{ top:4, right:4, left:0, bottom:0 }}>
                 <defs>
@@ -220,7 +220,7 @@ export default function Charts() {
       {signal && (
         <div className="panel">
           <div className="ph"><span className="ac">■</span> SIGNAL ANALYSIS — {symbol}</div>
-          <div style={{ padding:14, display:'flex', gap:20, alignItems:'flex-start' }}>
+          <div className="signal-detail">
             <div style={{ textAlign:'center', minWidth:130 }}>
               <div style={{ fontFamily:'Orbitron,sans-serif', fontSize:20, fontWeight:900, color:sigColor }}>{signal.signal}</div>
               <div style={{ fontSize:9, color:'var(--text2)', marginTop:4 }}>CONFIDENCE</div>

@@ -125,7 +125,7 @@ export default function Dashboard({ tickers, logs, portfolio }) {
 
       {/* ── Indicator pills ───────────────────────────────────────────────── */}
       {signal && (
-        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+        <div className="indicator-grid">
           <IndicatorPill label="RSI"        value={ind.rsi?.toFixed(1)}     color={ind.rsi < 30 ? 'var(--green)' : ind.rsi > 70 ? 'var(--red)' : 'var(--cyan)'} />
           <IndicatorPill label="MACD"       value={ind.macd?.toFixed(3)}    color={ind.macd > 0 ? 'var(--green)' : 'var(--red)'} />
           <IndicatorPill label="MACD HIST"  value={ind.macd_hist?.toFixed(4)} color={ind.macd_hist > 0 ? 'var(--green)' : 'var(--red)'} />

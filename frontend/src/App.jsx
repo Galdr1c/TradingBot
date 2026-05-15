@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LayoutDashboard, BarChart3, Wallet, Bot,
   BrainCircuit, Newspaper, Users, Settings,
-  Database, Minus, Square, X, GitBranch
+  Database, GitBranch, Radio, Search, ShieldCheck
 } from 'lucide-react';
 import './App.css';
 import * as api from './api';
@@ -14,24 +14,55 @@ import Bots       from './pages/Bots';
 import Kronos     from './pages/Kronos';
 import News       from './pages/News';
 import Swarm      from './pages/Swarm';
-import Strategies from './pages/Strategies';   // ← NEW: OpenTrader strategies
+import Strategies from './pages/Strategies';
 
 const NAV = [
-  { id:'dash',       label:'DASH',     icon:LayoutDashboard },
-  { id:'charts',     label:'CHART',    icon:BarChart3 },
-  { id:'portfolio',  label:'PORT',     icon:Wallet },
-  { id:'bots',       label:'BOTS',     icon:Bot },
-  { id:'kronos',     label:'AI',       icon:BrainCircuit },
-  { id:'swarm',      label:'SWARM',    icon:Users },
-  { id:'strategies', label:'STRAT',    icon:GitBranch },   // ← NEW
-  { id:'news',       label:'NEWS',     icon:Newspaper },
+  { id:'dash',       label:'Dashboard',  short:'DASH',  icon:LayoutDashboard, desc:'Portföy, piyasa ve sistem özeti' },
+  { id:'charts',     label:'Charts',     short:'CHART', icon:BarChart3,       desc:'Teknik analiz ve mum formasyonları' },
+  { id:'portfolio',  label:'Portfolio',  short:'PORT',  icon:Wallet,          desc:'Pozisyonlar ve getiri takibi' },
+  { id:'bots',       label:'Bots',       short:'BOTS',  icon:Bot,             desc:'Bot performansı ve kontrol paneli' },
+  { id:'kronos',     label:'Kronos AI',  short:'AI',    icon:BrainCircuit,    desc:'Zero-shot fiyat tahminleri' },
+  { id:'swarm',      label:'Swarm',      short:'SWARM', icon:Users,           desc:'Çok ajanlı karar motoru' },
+  { id:'strategies', label:'Strategies', short:'STRAT', icon:GitBranch,       desc:'GRID, DCA ve RSI stratejileri' },
+  { id:'news',       label:'News',       short:'NEWS',  icon:Newspaper,       desc:'Piyasa haberleri ve duyarlılık' },
 ];
 
+const PAGE_META = [
+  ...NAV,
+  { id:'settings', label:'Settings', short:'SET', icon:Settings, desc:'Bağlantılar, model ve veri kaynakları' },
+];
+
+function MarketRail({ tickers }) {
+  const items = tickers?.length ? tickers : [
+    { symbol:'BTC/USDT', price:0, change:0 },
+    { symbol:'ETH/USDT', price:0, change:0 },
+    { symbol:'AAPL', price:0, change:0 },
+  ];
+
+  return (
+    <div className="ticker-wrap" aria-label="Market ticker">
+      <div className="ticker-inner">
+        {[...items, ...items].map((t, i) => (
+          <span key={`${t.symbol}-${i}`} className="ticker-item">
+            <span className="ticker-symbol">{t.symbol}</span>
+            <span className="ticker-price">
+              ${Number(t.price || 0).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 })}
+            </span>
+            <span className={t.change >= 0 ? 'ticker-change up' : 'ticker-change down'}>
+              {t.change >= 0 ? '▲' : '▼'} {Math.abs(t.change || 0).toFixed(2)}%
+            </span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [page, setPage]         = useState('dash');
-  const [tickers, setTickers]   = useState([]);
+  const [page, setPage]           = useState('dash');
+  const [tickers, setTickers]     = useState([]);
   const [portfolio, setPortfolio] = useState(null);
-  const [logs, setLogs]         = useState([
+  const [logs, setLogs]           = useState([
     { t:'--:--:--', tp:'ok',   m:'[System] QuantumAI Trading Engine v3.1 starting...' },
     { t:'--:--:--', tp:'info', m:'[Data]   Connecting to market feeds...' },
   ]);
@@ -91,90 +122,75 @@ export default function App() {
     return () => { clearInterval(t1); clearInterval(t2); wsRef.current?.close(); logsWsRef.current?.close(); };
   }, [connectMarketWs, connectLogsWs, fetchTickers, fetchPortfolio]);
 
-  const dateStr = new Date().toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }).toUpperCase();
+  const active = PAGE_META.find(x => x.id === page) || PAGE_META[0];
+  const dateStr = new Date().toLocaleDateString('tr-TR', { day:'2-digit', month:'long', year:'numeric' });
+  const statusLabel = wsStatus === 'live' ? 'Live WebSocket' : wsStatus === 'http' ? 'Live HTTP' : wsStatus === 'reconnecting' ? 'Yeniden bağlanıyor' : 'Bağlanıyor';
 
   return (
     <div className="app">
-      {/* Titlebar */}
-      <div className="titlebar">
-        <div style={{ display:'flex', alignItems:'center', gap:10, WebkitAppRegion:'no-drag', width:220 }}>
-          <div style={{ width:24, height:24, borderRadius:6, background:'linear-gradient(135deg, var(--cyan), var(--purple))',
-            display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 0 10px rgba(56,189,248,0.5)' }}>
-            <Database size={13} color="#fff" />
-          </div>
-          <div style={{ fontFamily:'var(--font-display)', fontSize:12, fontWeight:700, letterSpacing:1.5, color:'var(--text-bright)' }}>QUANTUM AI</div>
-        </div>
-
-        <div className="tb-title">VIBE-TRADING · v3.1</div>
-
-        <div className="tb-right" style={{ width:300, justifyContent:'flex-end', gap:0 }}>
-          <div className="sb-ind" style={{ marginRight:16 }}>
-            <span className="live-dot" />
-            {wsStatus === 'live' ? 'LIVE WS' : wsStatus === 'http' ? 'LIVE HTTP' : wsStatus === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}
-          </div>
-          <span style={{ marginRight:20, fontSize:10 }}>{dateStr}</span>
-          <div style={{ display:'flex', alignItems:'center', height:'100%', WebkitAppRegion:'no-drag', marginRight:-16 }}>
-            <button className="win-btn" onClick={() => window.__TAURI__?.window.getCurrent().minimize?.()}><Minus size={14}/></button>
-            <button className="win-btn" onClick={() => window.__TAURI__?.window.getCurrent().toggleMaximize?.()}><Square size={11}/></button>
-            <button className="win-btn close" onClick={() => window.__TAURI__?.window.getCurrent().close?.()}><X size={15}/></button>
+      <aside className="sidebar">
+        <div className="brand-card">
+          <div className="brand-mark"><Database size={18} /></div>
+          <div>
+            <div className="brand-title">Quantum AI</div>
+            <div className="brand-sub">Trading Studio v3.1</div>
           </div>
         </div>
-      </div>
 
-      <div className="body">
-        {/* Sidebar */}
-        <div className="sidebar">
-          {NAV.map(({ id, label, icon: Icon }) => (
+        <nav className="nav-stack">
+          {NAV.map(({ id, label, short, icon: Icon }) => (
             <button key={id} className={`nb ${page===id?'act':''}`} onClick={() => setPage(id)} title={label}>
               <Icon size={18} />
               <span className="nbl">{label}</span>
+              <span className="nav-short">{short}</span>
             </button>
           ))}
-          <div style={{ flex:1 }} />
-          <button className="nb" title="SETTINGS" onClick={() => setPage('settings')}>
-            <Settings size={18} />
-            <span className="nbl">SET</span>
-          </button>
-        </div>
+        </nav>
 
-        {/* Content */}
-        <div className="content">
-          {/* Ticker strip */}
-          <div className="ticker-wrap">
-            <div className="ticker-inner">
-              {[...tickers, ...tickers].map((t, i) => (
-                <span key={i} style={{ marginRight:28, fontSize:9.5, display:'inline-flex', alignItems:'center', gap:6 }}>
-                  <span style={{ color:'var(--text2)', letterSpacing:.5 }}>{t.symbol}</span>
-                  <span style={{ color:'var(--text3)', fontFamily:'Orbitron,sans-serif', fontSize:9 }}>
-                    ${t.price?.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
-                  </span>
-                  <span style={{ color: t.change>=0?'var(--green)':'var(--red)', fontWeight:700 }}>
-                    {t.change>=0?'▲':'▼'}{Math.abs(t.change||0).toFixed(2)}%
-                  </span>
-                </span>
-              ))}
+        <button className={`nb settings-link ${page==='settings'?'act':''}`} title="Settings" onClick={() => setPage('settings')}>
+          <Settings size={18} />
+          <span className="nbl">Settings</span>
+          <span className="nav-short">SET</span>
+        </button>
+      </aside>
+
+      <div className="content">
+        <header className="titlebar">
+          <div className="page-heading">
+            <div className="eyebrow"><ShieldCheck size={13} /> AI-assisted trading terminal</div>
+            <h1>{active.label}</h1>
+            <p>{active.desc}</p>
+          </div>
+
+          <div className="top-actions">
+            <div className="search-shell"><Search size={14} /><span>Sembol, strateji veya haber ara</span></div>
+            <div className="status-pill">
+              <span className="live-dot" />
+              <Radio size={13} />
+              {statusLabel}
             </div>
+            <div className="date-pill">{dateStr}</div>
           </div>
+        </header>
 
-          {/* Pages */}
-          <div className="page">
-            {page === 'dash'       && <Dashboard tickers={tickers} logs={logs} portfolio={portfolio} />}
-            {page === 'charts'     && <Charts />}
-            {page === 'portfolio'  && <Portfolio />}
-            {page === 'bots'       && <Bots />}
-            {page === 'kronos'     && <Kronos />}
-            {page === 'swarm'      && <Swarm />}
-            {page === 'strategies' && <Strategies />}
-            {page === 'news'       && <News />}
-            {page === 'settings'   && <SettingsPage />}
-          </div>
-        </div>
+        <MarketRail tickers={tickers} />
+
+        <main className="page">
+          {page === 'dash'       && <Dashboard tickers={tickers} logs={logs} portfolio={portfolio} />}
+          {page === 'charts'     && <Charts />}
+          {page === 'portfolio'  && <Portfolio />}
+          {page === 'bots'       && <Bots />}
+          {page === 'kronos'     && <Kronos />}
+          {page === 'swarm'      && <Swarm />}
+          {page === 'strategies' && <Strategies />}
+          {page === 'news'       && <News />}
+          {page === 'settings'   && <SettingsPage />}
+        </main>
       </div>
     </div>
   );
 }
 
-/* ── Settings ─────────────────────────────────────────────────────────── */
 function SettingsPage() {
   const [apiUrl, setApiUrl] = useState('http://localhost:8000');
   const [otStatus, setOtStatus] = useState(null);
@@ -184,35 +200,27 @@ function SettingsPage() {
   }, []);
 
   return (
-    <div className="col fade-in" style={{ gap:10, maxWidth:640 }}>
+    <div className="col fade-in settings-grid">
       <div className="panel">
         <div className="ph"><span className="ac">■</span> BACKEND CONFIGURATION</div>
-        <div style={{ padding:16, display:'flex', flexDirection:'column', gap:12 }}>
+        <div className="panel-pad">
           <div>
-            <div style={{ fontSize:8.5, color:'var(--text2)', letterSpacing:1.2, marginBottom:5 }}>API Base URL</div>
-            <input value={apiUrl} onChange={e=>setApiUrl(e.target.value)}
-              style={{ width:'100%', background:'var(--panel)', border:'1px solid var(--panel-border)',
-                color:'var(--text-bright)', fontFamily:'var(--font-mono)', fontSize:10,
-                padding:'7px 10px', borderRadius:6, outline:'none' }} />
+            <div className="field-label">API Base URL</div>
+            <input className="input" value={apiUrl} onChange={e=>setApiUrl(e.target.value)} />
           </div>
         </div>
       </div>
 
-      {/* OpenTrader status */}
       <div className="panel">
         <div className="ph"><span className="ag">■</span> OPENTRADER STATUS</div>
-        <div style={{ padding:16 }}>
+        <div className="panel-pad">
           {otStatus ? (
             <>
-              <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:12 }}>
-                <div style={{ width:8, height:8, borderRadius:'50%',
-                  background: otStatus.available ? 'var(--green)' : 'var(--orange)',
-                  boxShadow: `0 0 6px ${otStatus.available ? 'var(--green)' : 'var(--orange)'}` }} />
-                <span style={{ fontSize:11, color:'var(--text-bright)', fontWeight:600 }}>
-                  {otStatus.available ? `Live on port ${otStatus.port}` : 'Simulation mode (install OpenTrader for live)'}
-                </span>
+              <div className="status-row">
+                <div className={otStatus.available ? 'status-dot ok' : 'status-dot warn'} />
+                <span>{otStatus.available ? `Live on port ${otStatus.port}` : 'Simulation mode — live işlem için OpenTrader kurulu olmalı'}</span>
               </div>
-              <div style={{ background:'rgba(0,0,0,0.3)', borderRadius:6, padding:12, fontFamily:'var(--font-mono)', fontSize:10, color:'var(--cyan)', lineHeight:1.8 }}>
+              <div className="code-card">
                 # Install OpenTrader (requires Node.js ≥ 22)<br/>
                 npm install -g opentrader<br/>
                 opentrader set-password &lt;password&gt;<br/>
@@ -220,40 +228,37 @@ function SettingsPage() {
               </div>
             </>
           ) : (
-            <div style={{ fontSize:10, color:'var(--text2)' }}>Loading status...</div>
+            <div className="loading-cell">Loading status...</div>
           )}
         </div>
       </div>
 
       <div className="panel">
         <div className="ph"><span className="ag">■</span> KRONOS MODEL</div>
-        <div style={{ padding:16, display:'flex', flexDirection:'column', gap:8 }}>
-          {[["Model","NeoQuasar/Kronos-small"],["Tokenizer","NeoQuasar/Kronos-Tokenizer-base"],["Max Context","512 tokens"],["Device","CPU / CUDA auto"],["Paper","AAAI 2026 — arxiv:2508.02739"]].map(([l,v]) => (
-            <div key={l} style={{ display:'flex', justifyContent:'space-between', fontSize:10, padding:'6px 0', borderBottom:'1px solid var(--panel-border)' }}>
-              <span style={{ color:'var(--text2)' }}>{l}</span>
-              <span style={{ color:'var(--cyan)', fontFamily:'var(--font-mono)', fontSize:9 }}>{v}</span>
-            </div>
+        <div className="panel-pad kv-list">
+          {[['Model','NeoQuasar/Kronos-small'],['Tokenizer','NeoQuasar/Kronos-Tokenizer-base'],['Max Context','512 tokens'],['Device','CPU / CUDA auto'],['Paper','AAAI 2026 — arxiv:2508.02739']].map(([l,v]) => (
+            <div key={l} className="kv-row"><span>{l}</span><strong>{v}</strong></div>
           ))}
         </div>
       </div>
 
       <div className="panel">
         <div className="ph"><span className="aa">■</span> DATA SOURCES</div>
-        <div style={{ padding:16, display:'flex', flexDirection:'column', gap:8 }}>
+        <div className="panel-pad source-list">
           {[
             {name:'Binance',          status:'CONNECTED', color:'var(--green)',  desc:'Crypto OHLCV + real-time tickers via CCXT'},
             {name:'Yahoo Finance',    status:'CONNECTED', color:'var(--green)',  desc:'Equity data via yfinance'},
-            {name:'Agent-Reach RSS',  status:'ACTIVE',    color:'var(--cyan)',   desc:'News from CoinTelegraph, Decrypt, CNBC'},
-            {name:'OpenTrader CLI',   status:'READY',     color:'var(--orange)', desc:'GRID · DCA · RSI — npm install -g opentrader'},
-            {name:'Kronos Predictor', status:'LOADED',    color:'var(--purple)', desc:'NeoQuasar/Kronos-small zero-shot forecaster'},
+            {name:'Agent-Reach RSS',  status:'ACTIVE',    color:'var(--cyan)',   desc:'CoinTelegraph, Decrypt, CNBC haber akışı'},
+            {name:'OpenTrader CLI',   status:'READY',     color:'var(--orange)', desc:'GRID · DCA · RSI strateji köprüsü'},
+            {name:'Kronos Predictor', status:'LOADED',    color:'var(--purple)', desc:'Zero-shot forecaster'},
           ].map(s => (
-            <div key={s.name} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 0', borderBottom:'1px solid var(--panel-border)' }}>
-              <div style={{ width:7, height:7, borderRadius:'50%', background:s.color, boxShadow:`0 0 6px ${s.color}`, flexShrink:0 }} />
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:10, color:'var(--text-bright)', fontWeight:600 }}>{s.name}</div>
-                <div style={{ fontSize:8.5, color:'var(--text2)', marginTop:2 }}>{s.desc}</div>
+            <div key={s.name} className="source-row">
+              <div className="source-dot" style={{ background:s.color, boxShadow:`0 0 14px ${s.color}` }} />
+              <div>
+                <div className="source-name">{s.name}</div>
+                <div className="source-desc">{s.desc}</div>
               </div>
-              <span className="tag" style={{ color:s.color, background:'rgba(255,255,255,0.04)', border:`1px solid ${s.color}30` }}>{s.status}</span>
+              <span className="tag" style={{ color:s.color, borderColor:`${s.color}55` }}>{s.status}</span>
             </div>
           ))}
         </div>
