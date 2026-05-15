@@ -124,8 +124,8 @@ class DataManager:
 
     def _get_from_cache(self, symbol: str, interval: str, limit: int):
         conn = sqlite3.connect(self.db_path)
-        query = f"SELECT * FROM ohlcv WHERE symbol='{symbol}' AND interval='{interval}' ORDER BY timestamp DESC LIMIT {limit}"
-        df = pd.read_sql(query, conn)
+        query = "SELECT * FROM ohlcv WHERE symbol = ? AND interval = ? ORDER BY timestamp DESC LIMIT ?"
+        df = pd.read_sql(query, conn, params=(symbol, interval, int(limit)))
         conn.close()
         if not df.empty:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
