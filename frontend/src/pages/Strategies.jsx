@@ -73,7 +73,7 @@ function GridPanel({ symbol, onResult }) {
       });
       setResult(res);
       onResult && onResult(res);
-    } catch (e) { console.error(e); }
+    } catch (e) { setResult({ ok:false, error:e.message }); }
     setLoading(false);
   }, [params, symbol, onResult]);
 
@@ -103,8 +103,10 @@ function GridPanel({ symbol, onResult }) {
         </div>
       </div>
 
+      {result?.error && <div className="panel"><div className="loading-cell" style={{ color:'var(--orange)' }}><AlertCircle size={14} /> {result.error}</div></div>}
+
       {/* Results */}
-      {result && (
+      {result && !result.error && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
             <Metric label="STEP SIZE" value={`$${fmt(result.step_size)}`} color="var(--cyan)" />
@@ -186,7 +188,7 @@ function DCAPanel({ symbol }) {
     try {
       const res = await api.runOpenTraderStrategy('dca', symbol, params);
       setResult(res);
-    } catch (e) { console.error(e); }
+    } catch (e) { setResult({ ok:false, error:e.message }); }
     setLoading(false);
   }, [params, symbol]);
 
@@ -212,7 +214,9 @@ function DCAPanel({ symbol }) {
         </div>
       </div>
 
-      {result && (
+      {result?.error && <div className="panel"><div className="loading-cell" style={{ color:'var(--orange)' }}><AlertCircle size={14} /> {result.error}</div></div>}
+
+      {result && !result.error && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8 }}>
             <Metric label="AVG ENTRY" value={`$${fmt(result.avg_entry)}`} color="var(--cyan)" />
@@ -260,7 +264,7 @@ function RSIPanel({ symbol }) {
     try {
       const res = await api.runOpenTraderStrategy('rsi', symbol, params);
       setResult(res);
-    } catch (e) { console.error(e); }
+    } catch (e) { setResult({ ok:false, error:e.message }); }
     setLoading(false);
   }, [params, symbol]);
 
@@ -284,7 +288,9 @@ function RSIPanel({ symbol }) {
         </div>
       </div>
 
-      {result && (
+      {result?.error && <div className="panel"><div className="loading-cell" style={{ color:'var(--orange)' }}><AlertCircle size={14} /> {result.error}</div></div>}
+
+      {result && !result.error && (
         <div className="panel">
           <div className="ph"><span className="ap">■</span> RSI SIGNAL</div>
           <div style={{ padding: 20, display: 'flex', gap: 20, alignItems: 'flex-start' }}>
@@ -327,7 +333,7 @@ function BacktestPanel({ symbol }) {
     try {
       const res = await api.runOpenTraderBacktest(strategy, symbol, timeframe, fromDate, toDate);
       setResult(res);
-    } catch (e) { console.error(e); }
+    } catch (e) { setResult({ ok:false, error:e.message }); }
     setLoading(false);
   }, [strategy, symbol, timeframe, fromDate, toDate]);
 
@@ -341,7 +347,7 @@ function BacktestPanel({ symbol }) {
         borderRadius: 8, display: 'flex', gap: 10, alignItems: 'center', fontSize: 10, color: 'var(--text2)' }}>
         <AlertCircle size={14} color="var(--cyan)" />
         For highest accuracy, install OpenTrader CLI:{' '}
-        <code style={{ color: 'var(--cyan)' }}>npm install -g opentrader</code>. Falls back to Python simulation.
+        <code style={{ color: 'var(--cyan)' }}>npm install -g opentrader</code>. No Python/random simulation fallback is used.
       </div>
 
       <div className="panel">
@@ -383,7 +389,9 @@ function BacktestPanel({ symbol }) {
         </div>
       </div>
 
-      {result && (
+      {result?.error && <div className="panel"><div className="loading-cell" style={{ color:'var(--orange)' }}><AlertCircle size={14} /> {result.error}</div></div>}
+
+      {result && !result.error && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
             <Metric label="TOTAL PROFIT" value={`$${fmt(metrics.total_profit ?? metrics.final_equity - 10000)}`}

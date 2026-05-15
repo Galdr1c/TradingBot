@@ -97,8 +97,8 @@ export default function Dashboard({ tickers, logs, portfolio }) {
   }, [loadChart, loadStats, loadOtStatus]);
 
   /* derived */
-  const portVal  = portfolio?.total_value ?? 128450;
-  const portPnl  = portfolio?.total_pnl   ?? 1240;
+  const portVal  = portfolio?.total_value;
+  const portPnl  = portfolio?.total_pnl;
   const sigColor = signal?.signal?.includes('BUY')  ? 'var(--green)'
                  : signal?.signal?.includes('SELL') ? 'var(--red)'
                  : 'var(--orange)';
@@ -110,10 +110,10 @@ export default function Dashboard({ tickers, logs, portfolio }) {
       {/* ── KPI row ──────────────────────────────────────────────────────── */}
       <div className="g4">
         {[
-          { label:'PORTFOLIO',   val:`$${fmt(portVal)}`,                          color:'var(--cyan)',   sub:'Total Net Worth' },
-          { label:'DAY P&L',     val:`${portPnl>=0?'+':''}$${fmt(portPnl)}`,      color:colorOf(portPnl), sub:'Realized + Unrealized' },
+          { label:'PORTFOLIO',   val: portVal == null ? '—' : `$${fmt(portVal)}`,       color:'var(--cyan)',   sub: portfolio?.connected ? 'Live Account' : 'No broker connected' },
+          { label:'DAY P&L',     val: portPnl == null ? '—' : `${Number(portPnl)>=0?'+':''}$${fmt(portPnl)}`, color:colorOf(portPnl), sub:'Realized + Unrealized' },
           { label:'MARKET BIAS', val:signal?.signal ?? 'LOADING',                 color:sigColor,         sub:`Conf: ${signal?.confidence ?? '—'}% · Score: ${signal?.score ?? '—'}` },
-          { label:'ACTIVE BOTS', val:'4 / 6',                                     color:'var(--orange)',  sub:'Execution Active' },
+          { label:'ACTIVE BOTS', val:'—', color:'var(--orange)', sub:'OpenTrader canlı botları Bots ekranında' },
         ].map(m => (
           <div key={m.label} className="mc">
             <div className="ml">{m.label}</div>
@@ -215,7 +215,7 @@ export default function Dashboard({ tickers, logs, portfolio }) {
                 </tr>
               </thead>
               <tbody>
-                {tickers.map(t => (
+                {tickers.length ? tickers.map(t => (
                   <tr key={t.symbol}>
                     <td style={{ fontWeight:700, color:'var(--text-bright)' }}>{t.symbol}</td>
                     <td style={{ color:'var(--text-bright)', fontFamily:'var(--font-display)', fontSize:11 }}>
@@ -235,7 +235,7 @@ export default function Dashboard({ tickers, logs, portfolio }) {
                       </span>
                     </td>
                   </tr>
-                ))}
+                )) : (<tr><td colSpan="6" style={{ color:'var(--text2)', padding:18, textAlign:'center' }}>Canlı piyasa verisi alınamadı; mock/demo fiyat gösterilmiyor.</td></tr>)}
               </tbody>
             </table>
           </div>
@@ -262,7 +262,7 @@ export default function Dashboard({ tickers, logs, portfolio }) {
             <GitBranch size={12} color="var(--green)" />
             <span>OPENTRADER INTEGRATION</span>
             <span style={{ marginLeft:'auto', fontSize:9, color: otStatus.available ? 'var(--green)' : 'var(--orange)' }}>
-              {otStatus.available ? `● LIVE  port ${otStatus.port}` : '○ SIMULATION MODE'}
+              {otStatus.available ? `● LIVE  port ${otStatus.port}` : '○ DISABLED'}
             </span>
           </div>
           <div style={{ padding:'10px 16px', display:'flex', gap:16, alignItems:'center', flexWrap:'wrap' }}>
@@ -271,7 +271,7 @@ export default function Dashboard({ tickers, logs, portfolio }) {
                 <Activity size={11} color="var(--cyan)" />
                 <span style={{ color:'var(--text-bright)', fontWeight:600, textTransform:'uppercase' }}>{s}</span>
                 <span className="tag" style={{ background:'rgba(0,212,255,0.08)', color:'var(--cyan)', border:'1px solid rgba(0,212,255,0.2)', fontSize:8 }}>
-                  {otStatus.available ? 'LIVE' : 'SIM'}
+                  {otStatus.available ? 'LIVE' : 'OFF'}
                 </span>
               </div>
             ))}

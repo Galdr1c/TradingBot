@@ -15,11 +15,12 @@ export default function Kronos() {
   const [result,  setResult]  = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [temperature] = useState(0.7);
   const [topP]        = useState(0.9);
 
   const runForecast = useCallback(async () => {
-    setLoading(true);
+    setLoading(true); setError(null);
     try {
       const sym = symbol.replace('/', '_');
 
@@ -57,7 +58,7 @@ export default function Kronos() {
       }
 
       setHistory([...histPoints, ...fcPoints]);
-    } catch (e) { console.error(e); }
+    } catch (e) { setError(e); setResult(null); setHistory([]); }
     setLoading(false);
   }, [symbol, tf, horizon]);
 
@@ -146,12 +147,14 @@ export default function Kronos() {
           )}
         </div>
 
-        {!result ? (
+        {error ? (
+          <div className="loading-cell" style={{ flex:1, flexDirection:'column', gap:12, color:'var(--orange)' }}><BrainCircuit size={32} color="rgba(255,170,0,0.35)" /><div>Canlı veri/model tahmini alınamadı: {error.message}</div><button className="btn sm" onClick={runForecast}>Tekrar dene</button></div>
+        ) : !result ? (
           <div className="loading-cell" style={{ flex:1, flexDirection:'column', gap:12 }}>
             <BrainCircuit size={32} color="rgba(124,77,255,0.3)" />
-            <div style={{ color:'var(--text2)', fontSize:11 }}>Click "RUN FORECAST" to generate predictions</div>
+            <div style={{ color:'var(--text2)', fontSize:11 }}>Canlı OHLCV ile tahmin çalıştır</div>
             <div style={{ fontSize:9, color:'var(--text2)', opacity:.7 }}>
-              Kronos analyses K-line patterns → forecasts next {horizon} bars with confidence bands
+              Mock/demo fiyat yok; veri sağlayıcı yanıt vermezse tahmin üretilmez
             </div>
           </div>
         ) : (

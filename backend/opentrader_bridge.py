@@ -1,7 +1,7 @@
 """
 OpenTrader Integration Bridge
 Connects to the OpenTrader CLI (https://github.com/Open-Trader/opentrader)
-for production-grade GRID, DCA and RSI bot execution and backtesting.
+for real GRID, DCA and RSI bot execution and backtesting. No local simulation fallback is used.
 
 Usage:
   npm install -g opentrader
@@ -231,46 +231,25 @@ async def run_opentrader_strategy(
     params: dict,
     paper: bool = True,
 ) -> dict:
-    """
-    Starts a bot via OpenTrader REST API or falls back to simulation.
-    """
-    if _ot_available:
-        body = {
-            "strategy": strategy,
-            "pair": symbol,
-            "settings": params,
-            "paperTrading": paper,
+    """Start a strategy through the real OpenTrader REST API only."""
+    if not _ot_available:
+        return {
+            "ok": False,
+            "source": "opentrader_unavailable",
+            "error": "OpenTrader is not running. No simulated bot was started.",
+            "install_hint": "npm install -g opentrader && opentrader set-password <pw> && opentrader up",
         }
-        result = await _post("/api/bots", body)
-        if result:
-            return {"source": "opentrader_api", "bot": result}
 
-    # Simulation fallback using our local strategy calculators
-    from agents import GridCalculator, DCACalculator
-    last_price = params.get("currentPrice", 50000)
-
-    if strategy == "grid":
-        calc = GridCalculator.calculate(
-            params.get("highPrice", last_price * 1.1),
-            params.get("lowPrice", last_price * 0.9),
-            params.get("gridLevels", 20),
-            params.get("quantityPerGrid", 0.001),
-            last_price,
-        )
-        return {"source": "simulation", "strategy": "grid", "symbol": symbol, **calc}
-
-    elif strategy == "dca":
-        calc = DCACalculator.calculate(
-            last_price,
-            params.get("dropPct", 3.0),
-            params.get("orders", 5),
-            params.get("baseQty", 0.001),
-            params.get("multiplier", 1.5),
-            params.get("takeProfitPct", 2.0),
-        )
-        return {"source": "simulation", "strategy": "dca", "symbol": symbol, **calc}
-
-    return {"source": "simulation", "strategy": strategy, "message": "Strategy preview only"}
+    body = {
+        "strategy": strategy,
+        "pair": symbol,
+        "settings": params,
+        "paperTrading": paper,
+    }
+    result = await _post("/api/bots", body)
+    if result:
+        return {"ok": True, "source": "opentrader_api", "bot": result}
+    return {"ok": False, "source": "opentrader_api", "error": "OpenTrader API did not return a bot payload"}
 
 
 async def run_opentrader_backtest(
@@ -281,50 +260,15 @@ async def run_opentrader_backtest(
     to_date: str,
     params: dict = None,
 ) -> dict:
-    """Run OpenTrader backtest via CLI, with Python fallback."""
+    """Run OpenTrader CLI backtest only; no random/local simulation fallback."""
     result = await run_backtest_cli(strategy, symbol, timeframe, from_date, to_date)
-
-    if "error" not in result:
-        return result
-
-    # Python-based backtest fallback
-    logger.info(f"OpenTrader CLI not available, using Python backtest for {strategy}")
-    return _python_strategy_backtest(strategy, symbol, params or {})
-
-
-def _python_strategy_backtest(strategy: str, symbol: str, params: dict) -> dict:
-    """Simple Python backtest simulation when OpenTrader CLI is unavailable."""
-    import random
-    random.seed(hash(strategy + symbol) % 1000)
-    trades = random.randint(40, 180)
-    win_rate = random.uniform(52, 72)
-    profit_pct = random.uniform(-5, 35)
-    sharpe = random.uniform(0.5, 2.5)
-    max_dd = random.uniform(5, 25)
-
-    # Build equity curve
-    equity = [10000.0]
-    for _ in range(trades):
-        won = random.random() < (win_rate / 100)
-        chg = random.uniform(0.5, 3.0) * (1 if won else -1)
-        equity.append(round(equity[-1] * (1 + chg / 100), 2))
-
-    return {
-        "source": "python_simulation",
-        "strategy": strategy,
-        "symbol": symbol,
-        "note": "Install OpenTrader for accurate backtests: npm install -g opentrader",
-        "metrics": {
-            "total_profit": round((equity[-1] - equity[0]), 2),
-            "profit_pct": round(profit_pct, 2),
-            "trades": trades,
-            "win_rate": round(win_rate, 1),
-            "sharpe": round(sharpe, 3),
-            "max_dd": round(max_dd, 2),
-            "final_equity": equity[-1],
-        },
-        "equity_curve": [
-            {"i": i, "equity": v}
-            for i, v in enumerate(equity)
-        ],
-    }
+    if "error" in result:
+        return {
+            "ok": False,
+            "source": "opentrader_cli_unavailable",
+            "error": result.get("error"),
+            "install": result.get("install", "npm install -g opentrader"),
+            "note": "No Python/random simulation fallback is used in live-data-only mode.",
+        }
+    result["ok"] = True
+    return result

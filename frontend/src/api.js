@@ -57,7 +57,10 @@ async function request(fn, { retries = 1 } = {}) {
 export const DEFAULT_SYMBOLS = 'BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,AAPL,NVDA,TSLA,MSFT';
 
 export const getTickers = async (symbols = DEFAULT_SYMBOLS) =>
-  request(async () => (await api.get('/market/tickers', { params: { symbols } })).data, { retries: 2 });
+  request(async () => {
+    const res = (await api.get('/market/tickers', { params: { symbols } })).data;
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  }, { retries: 2 });
 
 export const getHistory = async (symbol, interval = '1h', limit = 100) => {
   const sym = String(symbol || 'BTC/USDT').replace('/', '_');
@@ -95,11 +98,17 @@ export const runOpenTraderBacktest = async (strategy, symbol, timeframe, from_da
 
 // ── News ─────────────────────────────────────────────────────────────────────
 export const getNews = async (symbols = 'BTC,ETH,crypto', limit = 20) =>
-  request(async () => (await api.get('/news', { params: { symbols, limit } })).data, { retries: 1 });
+  request(async () => {
+    const res = (await api.get('/news', { params: { symbols, limit } })).data;
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  }, { retries: 1 });
 
 export const getSymbolNews = async (symbol, limit = 10) => {
   const sym = String(symbol || 'BTC').replace('/USDT', '').replace('/USD', '').replace('/', '');
-  return request(async () => (await api.get(`/news/${encodeURIComponent(sym)}`, { params: { limit } })).data);
+  return request(async () => {
+    const res = (await api.get(`/news/${encodeURIComponent(sym)}`, { params: { limit } })).data;
+    return Array.isArray(res) ? res : (res?.data ?? []);
+  });
 };
 
 // ── Portfolio / Bots ─────────────────────────────────────────────────────────

@@ -38,24 +38,23 @@ const PAGE_META = [
 ];
 
 function MarketRail({ tickers }) {
-  const items = tickers?.length ? tickers : [
-    { symbol: 'BTC/USDT', price: 0, change: 0 },
-    { symbol: 'ETH/USDT', price: 0, change: 0 },
-    { symbol: 'AAPL', price: 0, change: 0 },
-  ];
+  const items = Array.isArray(tickers) ? tickers : [];
   return (
     <div className="ticker-wrap" aria-label="Market ticker">
-      <div className="ticker-inner">
-        {[...items, ...items].map((t, i) => (
-          <span key={`${t.symbol}-${i}`} className="ticker-item">
-            <span className="ticker-symbol">{t.symbol}</span>
-            <span className="ticker-price">${Number(t.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-            <span className={Number(t.change || 0) >= 0 ? 'ticker-change up' : 'ticker-change down'}>
-              {Number(t.change || 0) >= 0 ? '▲' : '▼'} {Math.abs(Number(t.change || 0)).toFixed(2)}%
+      {items.length ? (
+        <div className="ticker-inner">
+          {[...items, ...items].map((t, i) => (
+            <span key={`${t.symbol}-${i}`} className="ticker-item">
+              <span className="ticker-symbol">{t.symbol}</span>
+              <span className="ticker-price">${Number(t.price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              <span className={Number(t.change || 0) >= 0 ? 'ticker-change up' : 'ticker-change down'}>
+                {Number(t.change || 0) >= 0 ? '▲' : '▼'} {Math.abs(Number(t.change || 0)).toFixed(2)}%
+              </span>
+              {t.source && <span className="ticker-source">{t.source}</span>}
             </span>
-          </span>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : <div className="ticker-empty">Canlı piyasa verisi bekleniyor — mock/demo fiyat gösterilmiyor.</div>}
     </div>
   );
 }
@@ -70,8 +69,8 @@ function AppCore() {
   const [tickers, setTickers] = useState([]);
   const [portfolio, setPortfolio] = useState(null);
   const [logs, setLogs] = useState([
-    { t: '--:--:--', tp: 'ok', m: '[System] QuantumAI Trading Engine v3.3 starting...' },
-    { t: '--:--:--', tp: 'info', m: '[Data] Connecting to market feeds...' },
+    { t: '--:--:--', tp: 'ok', m: '[System] QuantumAI Trading Engine v3.4 live-data-only starting...' },
+    { t: '--:--:--', tp: 'info', m: '[Data] Connecting to real market feeds...' },
   ]);
   const [wsStatus, setWsStatus] = useState('connecting');
   const [search, setSearch] = useState('');
@@ -166,7 +165,7 @@ function AppCore() {
           <div className="brand-mark"><Database size={18} /></div>
           <div>
             <div className="brand-title">Quantum AI</div>
-            <div className="brand-sub">Trading Studio v3.3</div>
+            <div className="brand-sub">Trading Studio v3.4</div>
           </div>
         </div>
 
@@ -290,7 +289,7 @@ function SettingsPage({ onSaved }) {
             <>
               <div className="status-row">
                 <div className={otStatus.available ? 'status-dot ok' : 'status-dot warn'} />
-                <span>{otStatus.available ? `Live on port ${otStatus.port}` : 'Simulation mode — canlı işlem için OpenTrader kurulu olmalı'}</span>
+                <span>{otStatus.available ? `Live on port ${otStatus.port}` : 'OpenTrader bağlı değil — bot işlemleri devre dışı'}</span>
               </div>
               <div className="code-card">npm install -g opentrader<br />opentrader set-password &lt;password&gt;<br />opentrader up --port {otStatus.port}</div>
             </>
@@ -312,8 +311,8 @@ function SettingsPage({ onSaved }) {
         <div className="ph"><span className="aa">■</span> DATA SOURCES</div>
         <div className="panel-pad source-list">
           {[
-            ['Binance', 'Crypto OHLCV primary'], ['Yahoo Finance', 'Equity/ETF OHLCV + crypto fallback'],
-            ['SQLite WAL Cache', 'Offline/stale recovery'], ['Demo fallback', 'Provider outage guard'],
+            ['Binance', 'Live crypto OHLCV + ticker'], ['Yahoo Finance', 'Real equity/ETF OHLCV + quote'],
+            ['SQLite WAL Cache', 'Only real provider data; optional recovery disabled by default'], ['Mock/Demo', 'Disabled — unavailable providers show errors instead'],
           ].map(([name, detail]) => <div className="source-item" key={name}><strong>{name}</strong><span>{detail}</span></div>)}
         </div>
       </div>

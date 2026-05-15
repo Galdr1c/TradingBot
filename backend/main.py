@@ -1,5 +1,5 @@
 """
-QuantumAI TradingBot Backend — v3.3
+QuantumAI TradingBot Backend — v3.4 Live Data Only
 Integrates: Kronos forecasting · Vibe-Trading swarm · OpenTrader strategies (GRID/DCA/RSI)
 """
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn, pandas as pd, asyncio, json, os, numpy as np, logging
 from typing import Dict, Any
 from datetime import datetime, timedelta
-from data_manager import DataManager
+from data_manager import DataManager, LiveDataUnavailable
 from predictor import KronosPredictor
 from agents import (TradingSwarm, _rsi_wilder, _macd, _adx,
                     _ema, _bollinger, _williams_r)
@@ -39,14 +39,14 @@ except Exception as e:
     logger.warning(f"AgentCore: {e}")
     agent_core = None
 
-app = FastAPI(title="QuantumAI TradingBot API", version="3.3.0")
+app = FastAPI(title="QuantumAI TradingBot API", version="3.4.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.on_event("startup")
 async def startup():
     ok = await ot.start_opentrader()
-    logger.info("OpenTrader: " + ("live" if ok else "simulation mode"))
+    logger.info("OpenTrader: " + ("live" if ok else "not available — execution disabled"))
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -326,7 +326,7 @@ def _signal(df: pd.DataFrame) -> dict:
         "source": source,
         "interval": str(last.get("interval", "unknown")),
         "latest_timestamp": _clean_value(ts),
-        "is_demo": source == "demo",
+        "is_live_data": source in {"binance", "yfinance"},
         "atr_pct": round(float(atr_pct), 3),
     }
 
@@ -366,7 +366,7 @@ async def agent_chat(data: Dict[str, str]):
 @app.get("/api/config")
 async def get_config():
     return {"DEFAULT_LLM": os.getenv("DEFAULT_LLM","ollama"), "MODEL_NAME": os.getenv("MODEL_NAME","deepseek-r1:7b"),
-            "OPENTRADER_PORT": ot.OPENTRADER_PORT, "opentrader_available": ot.is_available()}
+            "OPENTRADER_PORT": ot.OPENTRADER_PORT, "opentrader_available": ot.is_available(), "LIVE_DATA_ONLY": True, "ALLOW_REAL_CACHE_FALLBACK": data_manager.allow_cache_recovery}
 
 @app.post("/api/config")
 async def update_config(data: Dict[str, str]):
@@ -377,19 +377,16 @@ async def update_config(data: Dict[str, str]):
 @app.get("/api/market/tickers")
 async def get_tickers(symbols: str = "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,AAPL,NVDA,TSLA,MSFT"):
     results = []
-    for s in [x.strip().replace("_","/") for x in symbols.split(",")]:
+    errors = []
+    for raw in [x.strip() for x in symbols.split(",") if x.strip()]:
+        s = _sym(raw)
         try:
-            df = await data_manager.get_ohlcv(s, interval="1d", limit=2)
-            if df.empty or len(df) < 2: continue
-            last = float(df["close"].iloc[-1]); prev = float(df["close"].iloc[-2])
-            results.append({"symbol": s, "price": round(last,4), "change": round((last-prev)/prev*100,3),
-                             "volume": round(float(df["volume"].iloc[-1]),2),
-                             "high24h": round(float(df["high"].iloc[-1]),4),
-                             "low24h":  round(float(df["low"].iloc[-1]),4),
-                             "category": "crypto" if "/" in s else "equity"})
+            results.append(_sanitize(await data_manager.get_quote(s)))
         except Exception as e:
-            logger.warning(f"Ticker {s}: {e}")
-    return results
+            logger.warning("Ticker %s unavailable: %s", s, e)
+            errors.append({"symbol": s, "error": str(e)})
+    # Empty list is intentional: no mock ticker values are emitted.
+    return {"data": results, "errors": errors, "live_data_only": True, "timestamp": datetime.utcnow().isoformat()}
 
 @app.get("/api/market/history")
 async def get_history(symbol: str = "BTC_USDT", interval: str = "1h", limit: int = 100):
@@ -400,15 +397,13 @@ async def get_history(symbol: str = "BTC_USDT", interval: str = "1h", limit: int
         df = await data_manager.get_ohlcv(sym, interval, limit)
         df = _compute_indicators(df)
         signal = _signal(df)
-        return _sanitize({"symbol": sym, "interval": interval, "count": len(df), "data": _df_records(df), "signal": signal})
+        return _sanitize({"symbol": sym, "interval": interval, "count": len(df), "data": _df_records(df), "signal": signal, "live_data_only": True})
+    except LiveDataUnavailable as e:
+        logger.warning("live history unavailable for %s %s: %s", sym, interval, e)
+        raise HTTPException(503, str(e))
     except Exception as e:
-        logger.exception("history endpoint recovered for %s %s", sym, interval)
-        # API contract stays stable so UI widgets do not die on provider/cache errors.
-        return _sanitize({
-            "symbol": sym, "interval": interval, "count": 0, "data": [],
-            "signal": {"signal": "NEUTRAL", "confidence": 35, "reasons": [f"Data unavailable: {e}"], "score": 0},
-            "error": str(e),
-        })
+        logger.exception("history endpoint failed for %s %s", sym, interval)
+        raise HTTPException(500, str(e))
 
 @app.get("/api/market/signal/{symbol}")
 async def get_signal(symbol: str, timeframe: str = "1h"):
@@ -416,10 +411,13 @@ async def get_signal(symbol: str, timeframe: str = "1h"):
     timeframe = str(timeframe or "1h")
     try:
         df = await data_manager.get_ohlcv(sym, interval=timeframe, limit=240)
-        return _sanitize(_signal(_compute_indicators(df)))
+        return _sanitize({**_signal(_compute_indicators(df)), "live_data_only": True})
+    except LiveDataUnavailable as e:
+        logger.warning("live signal unavailable for %s %s: %s", sym, timeframe, e)
+        raise HTTPException(503, str(e))
     except Exception as e:
-        logger.exception("signal endpoint recovered for %s %s", sym, timeframe)
-        return _sanitize({"signal": "NEUTRAL", "confidence": 35, "reasons": [f"Signal unavailable: {e}"], "score": 0})
+        logger.exception("signal endpoint failed for %s %s", sym, timeframe)
+        raise HTTPException(500, str(e))
 
 @app.get("/api/market/decision/{symbol}")
 async def get_market_decision(symbol: str, timeframes: str = "15m,1h,4h,1d"):
@@ -450,7 +448,9 @@ async def get_market_decision(symbol: str, timeframes: str = "15m,1h,4h,1d"):
             frames.append({"timeframe": tf, "signal": sig.get("signal"), "confidence": sig.get("confidence"), "score": round(score, 4), "quality": sig.get("quality", {})})
         except Exception as exc:
             frames.append({"timeframe": tf, "signal": "ERROR", "confidence": 0, "score": 0, "error": str(exc)})
-    consensus_score = weighted / (total_w or 1)
+    if total_w <= 0:
+        raise HTTPException(503, "Live data unavailable for every requested timeframe")
+    consensus_score = weighted / total_w
     bullish = sum(1 for f in frames if "BUY" in str(f.get("signal")))
     bearish = sum(1 for f in frames if "SELL" in str(f.get("signal")))
     disagreement = bullish > 0 and bearish > 0
@@ -486,7 +486,7 @@ async def get_prediction(symbol: str, timeframe: str = "1h", pred_len: int = 24)
         last_p    = float(df["close"].iloc[-1])
         daily_vol = float(df["close"].pct_change().std()) * last_p
         now       = datetime.utcnow()
-        return {"symbol": sym, "model": "NeoQuasar/Kronos-small", "timestamp": now.isoformat(),
+        return {"symbol": sym, "model": predictor.model_name, "mode": predictor.mode, "timestamp": now.isoformat(),
                 "forecast": [{"t": i, "p": round(float(p),4),
                                "hi": round(float(p) + daily_vol*(1+i*0.12),4),
                                "lo": round(float(p) - daily_vol*(1+i*0.12),4),
@@ -522,92 +522,88 @@ async def validate_backtest(symbol: str = "BTC/USDT", strategy: str = "rsi", int
 
 # ── News ─────────────────────────────────────────────────────────────────────
 
-_MOCK = [
-    {"title":"Bitcoin eyes $100K as institutional demand surges","summary":"Large asset managers accumulate BTC.","sentiment":"positive","sentiment_score":0.72,"source":"CoinTelegraph","impact":"High","url":"#"},
-    {"title":"Ethereum ETF inflows hit record high this week","summary":"Spot ETH ETFs see record weekly inflows.","sentiment":"positive","sentiment_score":0.58,"source":"Bloomberg","impact":"High","url":"#"},
-    {"title":"Fed holds rates steady; risk assets rally","summary":"Federal Reserve unchanged, boosting risk appetite.","sentiment":"positive","sentiment_score":0.41,"source":"Reuters","impact":"Medium","url":"#"},
-    {"title":"Crypto market mixed signals ahead of CPI data","summary":"Traders cautious ahead of US inflation print.","sentiment":"neutral","sentiment_score":0.05,"source":"Decrypt","impact":"Medium","url":"#"},
-    {"title":"Solana network activity breaks all-time high","summary":"Daily active addresses and TXs hit new records.","sentiment":"positive","sentiment_score":0.63,"source":"CoinDesk","impact":"Medium","url":"#"},
-    {"title":"SEC issues new guidance on crypto staking","summary":"Regulatory clarity may affect DeFi protocols.","sentiment":"neutral","sentiment_score":-0.12,"source":"CryptoSlate","impact":"Medium","url":"#"},
-    {"title":"Whale wallets accumulate BTC at current levels","summary":"On-chain: addresses holding 1000+ BTC increase.","sentiment":"positive","sentiment_score":0.55,"source":"Glassnode","impact":"High","url":"#"},
-    {"title":"Tech stocks drag market as earnings disappoint","summary":"Q1 earnings miss expectations across mega-caps.","sentiment":"negative","sentiment_score":-0.48,"source":"CNBC","impact":"High","url":"#"},
-    {"title":"DeFi TVL drops 3% amid market uncertainty","summary":"TVL falls for third consecutive week.","sentiment":"negative","sentiment_score":-0.31,"source":"DeFiPulse","impact":"Medium","url":"#"},
-    {"title":"XRP gains clarity as court rules for Ripple","summary":"Federal court: XRP not a security for retail.","sentiment":"positive","sentiment_score":0.68,"source":"The Block","impact":"High","url":"#"},
-    {"title":"Mining difficulty hits ATH as hash rate surges","summary":"BTC mining difficulty up 8% — network growth.","sentiment":"positive","sentiment_score":0.33,"source":"BTC.com","impact":"Low","url":"#"},
-    {"title":"OpenAI launches crypto payment integration","summary":"Major AI lab accepts crypto for API billing.","sentiment":"positive","sentiment_score":0.44,"source":"TechCrunch","impact":"Medium","url":"#"},
-]
-
 @app.get("/api/news")
 async def get_news(symbols: str = "BTC,ETH,crypto", limit: int = 20):
-    all_articles = []
-    for sym in symbols.split(","):
-        sym = sym.strip()
+    articles = []
+    limit = max(1, min(int(limit or 20), 50))
+    for sym in [x.strip() for x in symbols.split(",") if x.strip()]:
         try:
-            res  = await news_agent.analyze_news(sym)
-            base = 0.35 if res["sentiment"]=="bullish" else -0.35 if res["sentiment"]=="bearish" else 0.0
-            srcs = ["CoinTelegraph","Bloomberg","Reuters","CoinDesk","Decrypt"]
-            for i, h in enumerate(res.get("headlines",[])):
-                ui = "positive" if res["sentiment"]=="bullish" else "negative" if res["sentiment"]=="bearish" else "neutral"
-                all_articles.append({"title":h,"summary":f"{sym}: {h[:150]}","sentiment":ui,
-                    "sentiment_score":round(base+(np.random.rand()-0.5)*0.15,3),
-                    "source":srcs[i%5],"impact":"High" if i==0 else "Medium" if i<3 else "Low",
-                    "url":"#","symbol":sym})
-        except Exception: pass
-    return (all_articles or _MOCK)[:limit]
+            res = await news_agent.analyze_news(sym)
+            sentiment = res.get("sentiment", "neutral")
+            ui = "positive" if sentiment == "bullish" else "negative" if sentiment == "bearish" else "neutral"
+            for a in res.get("articles", []):
+                articles.append({
+                    "title": a.get("title", ""),
+                    "summary": a.get("summary", ""),
+                    "sentiment": ui,
+                    "sentiment_score": a.get("sentiment_score", res.get("score", 0)),
+                    "source": a.get("source", "live-feed"),
+                    "impact": "Live",
+                    "url": a.get("url", ""),
+                    "symbol": sym,
+                })
+        except Exception as exc:
+            logger.warning("News unavailable for %s: %s", sym, exc)
+    # Empty list is intentional when live feeds have no matching items.
+    return _sanitize({"data": articles[:limit], "count": len(articles[:limit]), "live_data_only": True, "timestamp": datetime.utcnow().isoformat()})
 
 @app.get("/api/news/{symbol}")
 async def get_symbol_news(symbol: str, limit: int = 10):
     try:
-        res  = await news_agent.analyze_news(symbol)
-        base = 0.35 if res["sentiment"]=="bullish" else -0.35 if res["sentiment"]=="bearish" else 0.0
-        srcs = ["CoinTelegraph","CoinDesk","Bloomberg"]
-        return [{"title":h,"summary":h,"sentiment":"positive" if res["sentiment"]=="bullish" else "negative" if res["sentiment"]=="bearish" else "neutral",
-                 "sentiment_score":round(base+(np.random.rand()-0.5)*0.15,3),"source":srcs[i%3],
-                 "impact":"High" if i==0 else "Medium","url":"#"}
-                for i,h in enumerate(res.get("headlines",[]))][:limit]
-    except Exception as e: raise HTTPException(500,str(e))
+        res = await news_agent.analyze_news(symbol)
+        sentiment = res.get("sentiment", "neutral")
+        ui = "positive" if sentiment == "bullish" else "negative" if sentiment == "bearish" else "neutral"
+        items = []
+        for a in res.get("articles", [])[:max(1, min(int(limit or 10), 30))]:
+            items.append({
+                "title": a.get("title", ""),
+                "summary": a.get("summary", ""),
+                "sentiment": ui,
+                "sentiment_score": a.get("sentiment_score", res.get("score", 0)),
+                "source": a.get("source", "live-feed"),
+                "impact": "Live",
+                "url": a.get("url", ""),
+            })
+        return _sanitize({"data": items, "count": len(items), "live_data_only": True})
+    except Exception as e:
+        raise HTTPException(503, str(e))
 
 # ── Portfolio ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/portfolio")
 async def get_portfolio():
-    pos = [
-        {"symbol":"BTC/USDT","size":0.45,"entry":38200.0,"current_price":42500.0,"market_value":19125.0,"pnl":1935.0,"pnl_pct":11.3},
-        {"symbol":"ETH/USDT","size":2.5, "entry":1820.0, "current_price":2250.0, "market_value":5625.0, "pnl":1075.0,"pnl_pct":23.6},
-        {"symbol":"SOL/USDT","size":15,  "entry":95.0,   "current_price":118.5,  "market_value":1777.5, "pnl":352.5, "pnl_pct":24.7},
-        {"symbol":"NVDA",    "size":12,  "entry":415.0,  "current_price":487.0,  "market_value":5844.0, "pnl":864.0, "pnl_pct":17.3},
-    ]
-    cash  = 25078.0
-    tv    = sum(p["market_value"] for p in pos) + cash
-    tpnl  = sum(p["pnl"] for p in pos)
-    return {"total_value":round(tv,2),"total_pnl":round(tpnl,2),
-            "total_pnl_pct":round(tpnl/(tv-tpnl)*100,2),"cash":cash,"positions":pos}
+    """Return real account portfolio only.
+
+    Without a configured broker/exchange account, returning empty data is safer
+    than showing fake balances or fake P&L.
+    """
+    return {
+        "connected": False,
+        "source": "not_configured",
+        "message": "No exchange/broker account is configured. Portfolio values are not fabricated.",
+        "total_value": None,
+        "total_pnl": None,
+        "total_pnl_pct": None,
+        "cash": None,
+        "positions": [],
+        "history": [],
+        "live_data_only": True,
+    }
 
 # ── Bots ──────────────────────────────────────────────────────────────────────
 
-_TOGGLES: Dict[str,str] = {}
-_DEF_STATUS = {"bot_1":"active","bot_2":"active","bot_3":"paused","bot_4":"active","bot_5":"paused","bot_6":"paused"}
-_BOTS = [
-    {"id":"bot_1","name":"Kronos Scalper",  "symbol":"BTC/USDT","strategy":"AI Forecast",       "pnl":1248.5,"trades":142,"winrate":67.6},
-    {"id":"bot_2","name":"RSI Reversal",    "symbol":"ETH/USDT","strategy":"RSI Mean Reversion", "pnl":312.0, "trades":89, "winrate":58.4},
-    {"id":"bot_3","name":"Trend Rider",     "symbol":"SOL/USDT","strategy":"EMA Crossover",      "pnl":-88.2, "trades":56, "winrate":44.6},
-    {"id":"bot_4","name":"Sentiment NLP",   "symbol":"BTC/USDT","strategy":"Sentiment NLP",      "pnl":780.0, "trades":34, "winrate":73.5},
-    {"id":"bot_5","name":"OT Grid Bot",     "symbol":"BTC/USDT","strategy":"OpenTrader GRID",    "pnl":420.0, "trades":210,"winrate":61.9},
-    {"id":"bot_6","name":"OT DCA Bot",      "symbol":"ETH/USDT","strategy":"OpenTrader DCA",     "pnl":156.3, "trades":28, "winrate":63.2},
-]
-
 @app.get("/api/bots")
 async def get_bots():
-    return [{**b,"status":_TOGGLES.get(b["id"],_DEF_STATUS.get(b["id"],"paused"))} for b in _BOTS]
+    status = await ot.get_opentrader_status()
+    bots = status.get("bots") or []
+    return {"connected": bool(status.get("available") and status.get("connected")), "bots": bots, "source": "opentrader_api" if bots else "not_configured", "message": "No real OpenTrader bots returned." if not bots else "Live OpenTrader bots", "live_data_only": True}
 
 @app.post("/api/bots/{bot_id}/toggle")
 async def toggle_bot(bot_id: str):
-    b = next((x for x in _BOTS if x["id"]==bot_id), None)
-    if not b: raise HTTPException(404,"Not found")
-    cur = _TOGGLES.get(bot_id, _DEF_STATUS.get(bot_id,"paused"))
-    new = "paused" if cur=="active" else "active"
-    _TOGGLES[bot_id] = new
-    return {**b,"status":new}
+    if not ot.is_available():
+        raise HTTPException(503, "OpenTrader is not running; no simulated bot toggle is available")
+    # Keep this endpoint conservative until the installed OpenTrader API shape is confirmed.
+    raise HTTPException(501, "Live OpenTrader toggle endpoint is not mapped for this installation")
 
 # ── Swarm ─────────────────────────────────────────────────────────────────────
 
@@ -648,7 +644,10 @@ async def ot_strategy(data: Dict[str,Any]):
         if not df.empty:
             params["currentPrice"] = float(df["close"].iloc[-1])
     except Exception: pass
-    return await ot.run_opentrader_strategy(strategy, symbol, params, paper)
+    result = await ot.run_opentrader_strategy(strategy, symbol, params, paper)
+    if not result.get("ok", False):
+        raise HTTPException(503, result.get("error", "OpenTrader unavailable"))
+    return result
 
 @app.post("/api/opentrader/backtest")
 async def ot_backtest(data: Dict[str,Any]):
@@ -698,49 +697,52 @@ async def risk_position_size(symbol: str = "BTC/USDT", interval: str = "1h", acc
 
 @app.get("/api/system/stats")
 async def sys_stats():
+    payload = {"live_data_only": True, "timestamp": datetime.utcnow().isoformat()}
     try:
         import psutil
         cpu = psutil.cpu_percent(interval=0.1)
         mem = psutil.virtual_memory()
-        return {"cpu":round(cpu,1),"memory_pct":round(mem.percent,1),
-                "memory_used_gb":round(mem.used/1e9,2),
-                "kronos_status":"READY" if predictor.is_ready else "FALLBACK",
-                "research_status":"READY","agent_reach_status":"LOCAL ADAPTER","swarm_status":"ACTIVE",
-                "opentrader_status":"LIVE" if ot.is_available() else "SIMULATION"}
-    except Exception:
-        return {"cpu":0,"memory_pct":0,"memory_used_gb":0,"kronos_status":"READY",
-                "research_status":"READY","agent_reach_status":"LOCAL ADAPTER","swarm_status":"ACTIVE","opentrader_status":"SIMULATION"}
+        payload.update({"cpu": round(cpu,1), "memory_pct": round(mem.percent,1), "memory_used_gb": round(mem.used/1e9,2)})
+    except Exception as exc:
+        payload.update({"cpu": None, "memory_pct": None, "memory_used_gb": None, "system_error": str(exc)})
+    payload.update({
+        "kronos_status": "KRONOS" if predictor.is_ready else "STATISTICAL",
+        "research_status": "LIVE_FEEDS",
+        "agent_reach_status": "LOCAL_ADAPTER",
+        "swarm_status": "ACTIVE",
+        "opentrader_status": "LIVE" if ot.is_available() else "DISABLED",
+    })
+    return payload
 
 # ── WebSockets ────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/logs")
 async def ws_logs(ws: WebSocket):
     await ws.accept()
-    boot = [("ok","[System]     QuantumAI v3.3 online"),("info","[Data]       Binance + yfinance connected"),
-            ("ai","[Kronos]     Foundation model ready"),("ok","[Swarm]      4 agents initialised"),
-            ("info","[OpenTrader] GRID · DCA · RSI strategies loaded"),
-            ("ok","[Indicators] Wilder RSI · MACD · ADX · Williams %R active")]
     try:
+        boot = [
+            ("ok", "[System] QuantumAI v3.4 live-data-only mode"),
+            ("info", "[Data] Real providers only: Binance + yfinance"),
+            ("info", "[Policy] Mock/demo market data disabled"),
+            ("info", "[OpenTrader] " + ("connected" if ot.is_available() else "not running — execution disabled")),
+        ]
         for tp, msg in boot:
-            await ws.send_text(json.dumps({"t":datetime.now().strftime("%H:%M:%S"),"tp":tp,"m":msg}))
-            await asyncio.sleep(0.5)
-        beats = [("ok","[Tick]    Market refresh"),("info","[Signal]  Scanning for entries"),
-                 ("ok","[Risk]    Vol within limits"),("ai","[Swarm]   Consensus updated"),
-                 ("info","[OT]      Grid levels recalc")]
-        idx = 0
+            await ws.send_text(json.dumps({"t": datetime.now().strftime("%H:%M:%S"), "tp": tp, "m": msg}))
+            await asyncio.sleep(0.25)
         while True:
-            await asyncio.sleep(7)
-            tp, msg = beats[idx % len(beats)]
-            await ws.send_text(json.dumps({"t":datetime.now().strftime("%H:%M:%S"),"tp":tp,"m":msg}))
-            idx += 1
-    except WebSocketDisconnect: pass
+            await asyncio.sleep(15)
+            status = "LIVE" if ot.is_available() else "DISABLED"
+            await ws.send_text(json.dumps({"t": datetime.now().strftime("%H:%M:%S"), "tp": "info", "m": f"[Health] live-data-only heartbeat · OpenTrader {status}"}))
+    except WebSocketDisconnect:
+        pass
 
 @app.websocket("/ws/market")
 async def ws_market(ws: WebSocket):
     await ws.accept()
     try:
         while True:
-            await ws.send_json({"type":"tickers","data": await get_tickers()})
+            payload = await get_tickers()
+            await ws.send_json({"type":"tickers","data": payload.get("data", [])})
             await asyncio.sleep(5)
     except WebSocketDisconnect: pass
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, BarChart, Bar, LineChart, Line, ComposedChart } from 'recharts';
-import { RefreshCw, AlertTriangle } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import * as api from '../api';
 import { EmptyState, ErrorState, LoadingState, useToast } from '../components/AppShellUtils';
 
@@ -58,7 +58,6 @@ export default function Charts({ externalSymbol }) {
   const last = data[data.length - 1] || {};
   const sigColor = signal?.signal?.includes('BUY') ? 'var(--green)' : signal?.signal?.includes('SELL') ? 'var(--red)' : 'var(--orange)';
   const priceColor = data.length > 1 ? colorOf(Number(last.p) - Number(data[0].p)) : 'var(--cyan)';
-  const isDemo = signal?.quality?.is_demo || last.source === 'demo';
 
   const badges = [
     { label: 'RSI', value: Number.isFinite(last.rsi) ? last.rsi.toFixed(1) : null, color: last.rsi < 30 ? 'var(--green)' : last.rsi > 70 ? 'var(--red)' : 'var(--cyan)' },
@@ -72,7 +71,7 @@ export default function Charts({ externalSymbol }) {
     { label: 'VWAP', value: Number.isFinite(last.vwap) ? `$${fmt(last.vwap)}` : null, color: 'var(--orange)' },
     { label: 'CANDLE', value: last.candleSignal, color: last.candleSignal === 'BULLISH' ? 'var(--green)' : last.candleSignal === 'BEARISH' ? 'var(--red)' : 'var(--text2)' },
     { label: 'PATTERN', value: last.candlePattern?.slice(0, 18), color: 'var(--orange)' },
-    { label: 'SOURCE', value: signal?.quality?.source || last.source || '—', color: isDemo ? 'var(--orange)' : 'var(--green)' },
+    { label: 'SOURCE', value: signal?.quality?.source || last.source || '—', color: 'var(--green)' },
   ];
 
   return (
@@ -86,7 +85,7 @@ export default function Charts({ externalSymbol }) {
             {TIMEFRAMES.map(t => <button key={t} type="button" className="btn sm" onClick={() => setTf(t)} style={{ background: tf === t ? 'rgba(0,212,255,0.2)' : '', borderColor: tf === t ? 'var(--cyan)' : '' }}>{t}</button>)}
           </div>
           <button type="button" className="btn sm" onClick={load} disabled={loading}><RefreshCw size={10} className={loading ? 'spinner' : ''} /> {loading ? 'YÜKLENİYOR...' : 'YENİLE'}</button>
-          {isDemo && <div className="data-warning"><AlertTriangle size={14} /> Demo veri — sağlayıcı/cache yok</div>}
+          <div className="data-warning">LIVE ONLY · mock/demo kapalı</div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 16, alignItems: 'center' }}>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 17, fontWeight: 800, color: priceColor }}>${fmt(last.p)}</span>
             {signal && <span style={{ fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 800, color: sigColor }}>{signal.signal} {signal.confidence}%</span>}

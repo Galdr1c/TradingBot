@@ -152,14 +152,14 @@ export default function News() {
         </div>
 
         <div className="panel" style={{ flex:1 }}>
-          <div className="ph"><span className="ag">■</span> HIGH IMPACT SIGNALS</div>
+          <div className="ph"><span className="ag">■</span> LIVE SOURCE HIGHLIGHTS</div>
           <div className="sc" style={{ flex:1, maxHeight:500 }}>
-            {filtered.filter(a=>a.impact==='High').map((a,i) => (
+            {filtered.slice(0, 8).map((a,i) => (
               <div key={i} className="news-card">
                 <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:5 }}>
                   <SentimentIcon s={a.sentiment} />
                   <div style={{ flex:1, fontFamily:'Inter,sans-serif', fontSize:11, fontWeight:600, color:'var(--text3)', lineHeight:1.4 }}>{a.title}</div>
-                  <span className="tag" style={{ background:'rgba(255,170,0,0.1)', color:'var(--orange)', border:'1px solid rgba(255,170,0,0.2)', flexShrink:0 }}>HIGH</span>
+                  <span className="tag" style={{ background:'rgba(0,212,255,0.1)', color:'var(--cyan)', border:'1px solid rgba(0,212,255,0.2)', flexShrink:0 }}>LIVE</span>
                 </div>
                 <div className="nc-meta">
                   <SentimentTag s={a.sentiment} />
@@ -168,8 +168,8 @@ export default function News() {
                 <ScoreBar score={a.sentiment_score || 0} />
               </div>
             ))}
-            {filtered.filter(a=>a.impact==='High').length === 0 && (
-              <div className="loading-cell">No high-impact articles in current filter</div>
+            {filtered.length === 0 && (
+              <div className="loading-cell">Canlı feed eşleşmesi yok; mock haber gösterilmiyor.</div>
             )}
           </div>
         </div>
