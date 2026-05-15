@@ -1,6 +1,6 @@
-# QuantumAI TradingBot
+# QuantumAI TradingBot v3.2
 
-Kronos tahmin modeli, çoklu ajan karar mekanizması, teknik analiz, mum formasyonu analizi, risk kontrolü ve OpenTrader uyumlu strateji panellerini tek arayüzde birleştiren React + FastAPI tabanlı trading araştırma uygulaması.
+Kronos tahmin modeli, çoklu ajan karar mekanizması, teknik analiz, mum formasyonu analizi, risk kontrolü ve OpenTrader uyumlu strateji panellerini tek arayüzde birleştiren React + FastAPI tabanlı trading araştırma uygulaması. v3.2 ile veri dayanıklılığı, UI güvenliği, sinyal risk katmanı ve hata toleransı güçlendirilmiştir.
 
 > **Önemli:** Bu proje al/sat emri vermek için garanti sistemi değildir ve yatırım tavsiyesi üretmez. Teknik analiz, mum formasyonu, haber duyarlılığı ve model tahminleri olasılıksal karar destek araçlarıdır. Gerçek para ile işlem yapmadan önce paper trading, backtest, forward test ve risk limiti kullanın.
 
@@ -13,7 +13,9 @@ Kronos tahmin modeli, çoklu ajan karar mekanizması, teknik analiz, mum formasy
 - **Kronos tahmin ekranı:** Seçilen varlık ve zaman dilimi için sonraki bar tahmini ve güven bandı gösterir.
 - **OpenTrader entegrasyonu:** GRID, DCA ve RSI stratejileri için hesaplayıcı, durum paneli ve backtest endpointleri. OpenTrader kurulu değilse uygulama simülasyon moduna düşer.
 - **Dashboard & Charts:** Piyasa özeti, canlı WebSocket logları, indikatör rozetleri, mum sinyali, sinyal gerekçeleri ve gelişmiş grafik sekmeleri.
-- **Cache katmanı:** OHLCV verileri SQLite üzerinde saklanır; Binance/CCXT ve yfinance fallback mantığı kullanılır.
+- **Cache katmanı:** OHLCV verileri SQLite WAL üzerinde saklanır; Binance/CCXT, yfinance, stale-cache ve açıkça işaretlenen demo fallback mantığı kullanılır.
+- **UI güvenliği:** Global ErrorBoundary, toast bildirimleri, çalışan sembol araması, gerçek API Base URL kaydı ve grafik empty/error/loading durumları.
+- **Risk katmanı:** Sinyal cevabına ATR tabanlı stop-loss, take-profit, volatilite yüzdesi ve veri kalitesi bilgisi eklenmiştir.
 
 ## Proje Yapısı
 
@@ -30,13 +32,14 @@ TradingBot-main/
 │  └─ requirements.txt
 ├─ frontend/
 │  ├─ src/App.jsx             # Ana layout ve navigasyon
-│  ├─ src/api.js              # Backend API client
+│  ├─ src/api.js              # Retry destekli, ayarlanabilir Backend API client
 │  ├─ src/pages/Dashboard.jsx # KPI, grafik, sinyal ve sistem durumu
-│  ├─ src/pages/Charts.jsx    # Teknik analiz grafik sekmeleri
+│  ├─ src/pages/Charts.jsx    # Teknik analiz, risk kartları, veri kalitesi ve grafik sekmeleri
 │  ├─ src/pages/Kronos.jsx    # AI tahmin ekranı
 │  ├─ src/pages/Strategies.jsx# GRID/DCA/RSI strateji paneli
 │  └─ src/pages/Swarm.jsx     # Çoklu ajan konsensüsü
 ├─ SETUP_v3.1.md              # Entegrasyon/migrasyon notları
+├─ RESEARCH_IMPROVEMENTS_v3_2.md # Araştırma ve uygulanan iyileştirme kararları
 ├─ package.json               # Root geliştirme scriptleri
 └─ run_app.ps1                # Windows hızlı başlatma scripti
 ```
@@ -116,6 +119,14 @@ opentrader up --port 8001
 
 Backend açılışta OpenTrader servisini kontrol eder. Uygunsa `LIVE`, değilse `SIMULATION` modunda çalışır.
 
+## v3.2 Sağlamlık Geliştirmeleri
+
+- API client artık geçici 5xx hatalarda retry yapar ve kullanıcıya toast bildirimi gösterir.
+- Market history/signal endpointleri sağlayıcı hatasında UI'ı kırmak yerine güvenli `NEUTRAL` cevap veya açıkça işaretlenen demo veri döndürür.
+- SQLite cache WAL + timeout + async lock ile eşzamanlı isteklerde `database locked` riskini azaltır.
+- VWAP hesaplaması lookahead bias azaltmak için kümülatif/expanding hesaplamaya çevrilmiştir.
+- Vite build çıktısı manual chunk ile bölünmüştür.
+
 ## Analiz Mantığı
 
 ### Teknik analiz skoru
@@ -126,7 +137,7 @@ Sistem son OHLCV serisine şu bileşenleri uygular:
 2. **Trend:** EMA 20/50/200 dizilimi, ADX trend gücü, MACD/signal kesişimi.
 3. **Volatilite:** Bollinger Bands konumu ve ATR.
 4. **Hacim:** OBV ve hacim ortalamasına göre hacim onayı.
-5. **Fiyat konumu:** VWAP üstü/altı ve Bollinger band yüzdesi.
+5. **Fiyat konumu:** Kümülatif VWAP üstü/altı ve Bollinger band yüzdesi.
 6. **Mum formasyonu:** Son mum ve yakın formasyon bağlamı için bullish/bearish skor.
 
 Her bileşen ağırlıklı puana çevrilir. Nihai skor şu etiketlere dönüştürülür:
@@ -167,7 +178,7 @@ Bu skor tek başına işlem kararı değildir; teknik analiz sisteminde yalnızc
 |---|---|
 | `GET /api/market/tickers` | Varsayılan semboller için fiyat ve 24s değişim |
 | `GET /api/market/history` | OHLCV + indikatör + mum analizi + sinyal |
-| `GET /api/market/signal/{symbol}` | Tek sembol için ağırlıklı sinyal |
+| `GET /api/market/signal/{symbol}` | Tek sembol için ağırlıklı sinyal + ATR risk seviyeleri + veri kalitesi |
 | `GET /api/predict/{symbol}` | Kronos tahmini ve güven bandı |
 | `POST /api/swarm/run` | Çoklu ajan konsensüsü |
 | `GET /api/backtest/run` | Python backtest motoru |
@@ -182,7 +193,7 @@ Bu skor tek başına işlem kararı değildir; teknik analiz sisteminde yalnızc
 
 - Sembol formatı hem `BTC/USDT` hem `BTC_USDT` olarak kabul edilir.
 - Crypto verileri önce Binance/CCXT üzerinden, mümkün değilse yfinance üzerinden alınır.
-- OHLCV cache’i SQLite içindedir; test sırasında eski veri görürseniz `backend/market_data.db` dosyasını temizleyebilirsiniz.
+- OHLCV cache’i SQLite WAL içindedir; test sırasında eski veri görürseniz `backend/market_data.db` dosyasını temizleyebilirsiniz.
 - Frontend build testi:
 
 ```bash
@@ -216,3 +227,14 @@ python -m py_compile backend/*.py backend/swarm/*.py
 - `data_manager.py` cache sorgusu parametreli hale getirildi.
 - Frontend production build doğrulandı.
 - Python dosyaları syntax kontrolünden geçirildi.
+
+
+## v3.2 Değişiklik Özeti
+
+- UI arama kutusu çalışır hale getirildi.
+- Settings ekranındaki API Base URL kaydı gerçek API client ile bağlandı.
+- Charts ekranına veri kaynağı, demo veri uyarısı, ATR risk kartları ve boş/hata durumları eklendi.
+- Global ErrorBoundary ve toast bildirim sistemi eklendi.
+- `backend/data_manager.py` yeniden yazıldı: WAL cache, per-symbol lock, provider fallback ve demo fallback.
+- `backend/main.py` sinyal motoru volatilite/hacim/VWAP/risk ve data-quality alanlarıyla güçlendirildi.
+- Frontend build, frontend lint ve Python syntax kontrolleri çalıştırıldı.

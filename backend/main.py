@@ -55,8 +55,34 @@ async def shutdown():
 def _sym(s: str) -> str:
     return s.replace("_", "/")
 
+def _clean_value(x):
+    try:
+        if x is None:
+            return None
+        if isinstance(x, (float, np.floating)) and (np.isnan(x) or np.isinf(x)):
+            return None
+        if isinstance(x, (int, float, str, bool)):
+            return x
+        if hasattr(x, "isoformat"):
+            return x.isoformat()
+    except Exception:
+        pass
+    return x
+
+def _sanitize(obj):
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    if isinstance(obj, tuple):
+        return [_sanitize(v) for v in obj]
+    return _clean_value(obj)
+
 def _df_records(df):
-    return json.loads(df.to_json(orient="records", date_format="iso"))
+    if df is None or df.empty:
+        return []
+    records = json.loads(df.replace({np.nan: None}).to_json(orient="records", date_format="iso"))
+    return _sanitize(records)
 
 def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
@@ -93,111 +119,234 @@ def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"])
         df["stoch_k"] = stoch.stoch(); df["stoch_d"] = stoch.stoch_signal()
 
-        # VWAP (session)
+        # Expanding VWAP; uses only candles up to each timestamp to avoid lookahead leakage.
         tp = (h + l + c) / 3
-        df["vwap"] = float(np.sum(tp * v) / (np.sum(v) + 1e-10))
+        cum_vol = np.cumsum(np.maximum(v, 0)) + 1e-10
+        df["vwap"] = np.cumsum(tp * np.maximum(v, 0)) / cum_vol
     except Exception as e:
         logger.warning(f"Indicators: {e}")
     return df
 
 def _signal(df: pd.DataFrame) -> dict:
-    if len(df) < 20:
-        return {"signal": "NEUTRAL", "confidence": 50, "reasons": [], "score": 0}
+    """Weighted technical signal with risk and data-quality metadata.
 
-    last = df.iloc[-1]; prev = df.iloc[-2] if len(df) > 1 else last
+    The engine intentionally avoids hard guarantees. It combines trend,
+    momentum, volatility, volume and candlestick confirmation, then returns
+    a bounded confidence plus ATR-based levels for risk planning.
+    """
+    if df is None or df.empty or len(df) < 20:
+        return {"signal": "NEUTRAL", "confidence": 45, "reasons": ["Insufficient candles"], "score": 0, "quality": {"candles": 0}}
 
-    def v(col, fb=0.0):
-        x = last.get(col, fb)
+    df = df.copy().sort_values("timestamp") if "timestamp" in df.columns else df.copy()
+    last = df.iloc[-1]
+    prev = df.iloc[-2] if len(df) > 1 else last
+
+    def num(row, col, fb=0.0):
         try:
+            x = row.get(col, fb)
             x = float(x)
             return fb if np.isnan(x) or np.isinf(x) else x
         except Exception:
             return fb
 
-    def vp(col, fb=0.0):
-        x = prev.get(col, fb)
-        try:
-            x = float(x)
-            return fb if np.isnan(x) or np.isinf(x) else x
-        except Exception:
-            return fb
-
-    rsi   = v("rsi", 50); macd = v("macd"); msig = v("macd_signal")
-    mhist = v("macd_hist"); phist = vp("macd_hist")
-    adxv  = v("adx", 20);  wr = v("williams_r", -50)
-    e20   = v("ema_20", v("close", 0)); e50 = v("ema_50", v("close", 0)); e200 = v("ema_200", e50)
-    bbu   = v("bb_upper", v("close", 0)); bbl = v("bb_lower", v("close", 0))
-    close = v("close") or v("p", 0)
+    close = num(last, "close", num(last, "p", 0.0))
+    prev_close = num(prev, "close", close)
+    rsi = num(last, "rsi", 50.0)
+    macd = num(last, "macd", 0.0)
+    msig = num(last, "macd_signal", 0.0)
+    mhist = num(last, "macd_hist", 0.0)
+    phist = num(prev, "macd_hist", 0.0)
+    adxv = num(last, "adx", 20.0)
+    wr = num(last, "williams_r", -50.0)
+    e20 = num(last, "ema_20", close)
+    e50 = num(last, "ema_50", close)
+    e200 = num(last, "ema_200", e50)
+    bbu = num(last, "bb_upper", close * 1.02)
+    bbl = num(last, "bb_lower", close * 0.98)
+    atr = num(last, "atr", max(abs(close - prev_close), close * 0.01))
+    volume = num(last, "volume", 0.0)
+    vwap = num(last, "vwap", close)
     candle_pattern = str(last.get("candle_pattern", "No clear pattern"))
-    candle_signal  = str(last.get("candle_signal", "NEUTRAL"))
-    candle_score   = v("candle_score", 0.0)
+    candle_signal = str(last.get("candle_signal", "NEUTRAL"))
+    candle_score = num(last, "candle_score", 0.0)
 
-    sc = 0.0; mw = 0.0; reasons = []
+    closes = pd.to_numeric(df["close"], errors="coerce").dropna().tail(40).to_numpy(float) if "close" in df else np.array([])
+    trend_pct = 0.0
+    if len(closes) >= 8 and close:
+        x = np.arange(len(closes[-20:]))
+        y = closes[-20:]
+        trend_pct = float(np.polyfit(x, y, 1)[0] / close * 100)
 
-    # RSI (w=2)
-    mw += 2
-    if rsi < 30:     sc += 2;  reasons.append(f"RSI oversold {rsi:.1f}")
-    elif rsi < 42:   sc += 1;  reasons.append(f"RSI bearish lean {rsi:.1f}")
-    elif rsi > 70:   sc -= 2;  reasons.append(f"RSI overbought {rsi:.1f}")
-    elif rsi > 58:   sc -= 1;  reasons.append(f"RSI bull lean {rsi:.1f}")
+    vol_ratio = 1.0
+    if "volume" in df and len(df) >= 20:
+        vols = pd.to_numeric(df["volume"], errors="coerce").fillna(0).tail(20).to_numpy(float)
+        vol_ratio = float(vols[-1] / (np.mean(vols[:-1]) + 1e-10)) if len(vols) > 1 else 1.0
+        if not np.isfinite(vol_ratio):
+            vol_ratio = 1.0
 
-    # MACD crossover (w=2)
-    mw += 2
-    if macd > msig and phist < 0 and mhist > 0:
-        sc += 2; reasons.append("MACD bull crossover ✓")
+    score = 0.0
+    max_score = 0.0
+    reasons = []
+
+    def add(weight, value, reason=None):
+        nonlocal score, max_score, reasons
+        max_score += abs(weight)
+        score += float(value)
+        if reason:
+            reasons.append(reason)
+
+    # Momentum: RSI is mean-reversion weighted, not used as a standalone promise.
+    if rsi < 28:
+        add(2.0, 2.0, f"RSI oversold {rsi:.1f}")
+    elif rsi < 40:
+        add(2.0, 0.9, f"RSI recovering zone {rsi:.1f}")
+    elif rsi > 72:
+        add(2.0, -2.0, f"RSI overbought {rsi:.1f}")
+    elif rsi > 60:
+        add(2.0, -0.8, f"RSI elevated {rsi:.1f}")
+    else:
+        add(2.0, 0.0)
+
+    # MACD with histogram flip confirmation.
+    if macd > msig and phist <= 0 < mhist:
+        add(2.0, 2.0, "MACD bullish crossover")
     elif macd > msig:
-        sc += 1; reasons.append("MACD above signal")
-    elif macd < msig and phist > 0 and mhist < 0:
-        sc -= 2; reasons.append("MACD bear crossover ✓")
+        add(2.0, 0.9, "MACD above signal")
+    elif macd < msig and phist >= 0 > mhist:
+        add(2.0, -2.0, "MACD bearish crossover")
     elif macd < msig:
-        sc -= 1; reasons.append("MACD below signal")
+        add(2.0, -0.9, "MACD below signal")
+    else:
+        add(2.0, 0.0)
 
-    # ADX (w=1.5)
-    mw += 1.5; td = 1 if e20 > e50 else -1
-    if adxv > 25:   sc += 1.5*td; reasons.append(f"ADX {adxv:.1f} strong {'up' if td>0 else 'down'}trend")
-    elif adxv > 20: sc += 0.7*td; reasons.append(f"ADX {adxv:.1f} moderate trend")
+    # Trend regime: ADX strengthens the EMA/trend direction rather than blindly buying strength.
+    trend_dir = 1 if (e20 > e50 and trend_pct >= 0) else -1 if (e20 < e50 and trend_pct <= 0) else 0
+    if adxv >= 28 and trend_dir:
+        add(1.6, 1.6 * trend_dir, f"ADX {adxv:.1f} confirms {'up' if trend_dir > 0 else 'down'}trend")
+    elif adxv >= 20 and trend_dir:
+        add(1.6, 0.7 * trend_dir, f"ADX {adxv:.1f} moderate trend")
+    else:
+        add(1.6, 0.0, "Range-bound / weak trend")
 
-    # EMA stack (w=1.5)
-    mw += 1.5
-    if e20 > e50 > e200 and close > e20:   sc += 1.5; reasons.append("EMA stack 20>50>200 ↑")
-    elif e20 < e50 < e200 and close < e20: sc -= 1.5; reasons.append("EMA stack 20<50<200 ↓")
-    elif e20 > e50: sc += 0.7
-    elif e20 < e50: sc -= 0.7
+    # EMA stack and price location.
+    if e20 > e50 > e200 and close >= e20:
+        add(1.5, 1.5, "Bullish EMA stack 20>50>200")
+    elif e20 < e50 < e200 and close <= e20:
+        add(1.5, -1.5, "Bearish EMA stack 20<50<200")
+    elif e20 > e50:
+        add(1.5, 0.6, "EMA20 above EMA50")
+    elif e20 < e50:
+        add(1.5, -0.6, "EMA20 below EMA50")
+    else:
+        add(1.5, 0.0)
 
-    # Bollinger (w=1)
-    mw += 1; bbr = bbu - bbl
-    bbp = (close - bbl) / (bbr + 1e-10) if bbr > 0 else 0.5
-    if bbp < 0.15:  sc += 1; reasons.append(f"Near lower BB ({bbp:.0%})")
-    elif bbp > 0.85:sc -= 1; reasons.append(f"Near upper BB ({bbp:.0%})")
+    # Bollinger and Williams %R mean-reversion context.
+    bb_width = bbu - bbl
+    bbp = (close - bbl) / (bb_width + 1e-10) if bb_width > 0 else 0.5
+    if bbp < 0.12:
+        add(1.0, 1.0, f"Near lower Bollinger band ({bbp:.0%})")
+    elif bbp > 0.88:
+        add(1.0, -1.0, f"Near upper Bollinger band ({bbp:.0%})")
+    else:
+        add(1.0, 0.0)
 
-    # Williams %R (w=1)
-    mw += 1
-    if wr < -80:  sc += 1; reasons.append(f"W%R oversold {wr:.0f}")
-    elif wr > -20:sc -= 1; reasons.append(f"W%R overbought {wr:.0f}")
+    if wr < -85:
+        add(0.9, 0.9, f"Williams %R oversold {wr:.0f}")
+    elif wr > -15:
+        add(0.9, -0.9, f"Williams %R overbought {wr:.0f}")
+    else:
+        add(0.9, 0.0)
 
-    # Candlestick pattern confirmation (w=1.2)
-    mw += 1.2
+    # Volume and VWAP confirmation.
+    if vol_ratio >= 1.35 and trend_dir > 0 and close > vwap:
+        add(1.0, 1.0, f"Volume {vol_ratio:.1f}x confirms upside")
+    elif vol_ratio >= 1.35 and trend_dir < 0 and close < vwap:
+        add(1.0, -1.0, f"Volume {vol_ratio:.1f}x confirms downside")
+    else:
+        add(1.0, 0.0)
+
+    if close > vwap * 1.001:
+        add(0.5, 0.5, "Price above VWAP")
+    elif close < vwap * 0.999:
+        add(0.5, -0.5, "Price below VWAP")
+    else:
+        add(0.5, 0.0)
+
+    # Candlestick pattern as confirmation layer only.
     if candle_signal == "BULLISH":
-        sc += min(1.2, abs(candle_score) * 0.6)
-        reasons.append(f"Candlestick bullish: {candle_pattern}")
+        add(1.2, min(1.2, abs(candle_score) * 0.55), f"Bullish candle: {candle_pattern}")
     elif candle_signal == "BEARISH":
-        sc -= min(1.2, abs(candle_score) * 0.6)
-        reasons.append(f"Candlestick bearish: {candle_pattern}")
+        add(1.2, -min(1.2, abs(candle_score) * 0.55), f"Bearish candle: {candle_pattern}")
+    else:
+        add(1.2, 0.0)
 
-    norm = sc / (mw + 1e-10)
-    if norm >= 0.55:   sig, conf = "STRONG BUY",  88
-    elif norm >= 0.25: sig, conf = "BUY",          72
-    elif norm <= -0.55:sig, conf = "STRONG SELL",  85
-    elif norm <= -0.25:sig, conf = "SELL",          68
-    else:              sig, conf = "NEUTRAL",       52
-    conf = min(95, conf + (5 if adxv > 30 else 0))
+    norm = float(score / (max_score + 1e-10))
+    if norm >= 0.58:
+        sig, conf = "STRONG BUY", 86
+    elif norm >= 0.28:
+        sig, conf = "BUY", 70
+    elif norm <= -0.58:
+        sig, conf = "STRONG SELL", 84
+    elif norm <= -0.28:
+        sig, conf = "SELL", 68
+    else:
+        sig, conf = "NEUTRAL", 52
 
-    return {"signal": sig, "confidence": conf, "reasons": reasons[:6], "score": round(norm, 4),
-            "indicators": {"rsi": round(rsi,2), "macd": round(macd,4), "macd_hist": round(mhist,4),
-                           "adx": round(adxv,2), "williams_r": round(wr,2), "bb_pct": round(bbp*100,1),
-                           "ema20": round(e20,2), "ema50": round(e50,2),
-                           "candle_pattern": candle_pattern, "candle_signal": candle_signal,
-                           "candle_score": round(candle_score, 3)}}
+    atr_pct = (atr / close * 100) if close else 0.0
+    if atr_pct > 5:
+        conf -= 8
+        reasons.append(f"High volatility: ATR {atr_pct:.2f}%")
+    if len(df) < 80:
+        conf -= 5
+        reasons.append("Limited candle history")
+    if adxv > 30 and abs(norm) > 0.28:
+        conf += 4
+    conf = int(min(94, max(35, conf)))
+
+    if sig in {"BUY", "STRONG BUY"}:
+        stop = close - atr * 1.8
+        take = close + atr * 2.6
+    elif sig in {"SELL", "STRONG SELL"}:
+        stop = close + atr * 1.8
+        take = close - atr * 2.6
+    else:
+        stop = close - atr * 1.5
+        take = close + atr * 1.5
+
+    ts = last.get("timestamp") if "timestamp" in df.columns else None
+    source = str(last.get("source", "unknown"))
+    quality = {
+        "candles": int(len(df)),
+        "source": source,
+        "interval": str(last.get("interval", "unknown")),
+        "latest_timestamp": _clean_value(ts),
+        "is_demo": source == "demo",
+        "atr_pct": round(float(atr_pct), 3),
+    }
+
+    payload = {
+        "signal": sig,
+        "confidence": conf,
+        "reasons": reasons[:7],
+        "score": round(norm, 4),
+        "risk": {
+            "last_price": round(close, 6),
+            "stop_loss": round(float(stop), 6),
+            "take_profit": round(float(take), 6),
+            "atr": round(float(atr), 6),
+            "atr_pct": round(float(atr_pct), 3),
+            "risk_note": "ATR-based educational planning; not financial advice",
+        },
+        "quality": quality,
+        "indicators": {
+            "rsi": round(rsi, 2), "macd": round(macd, 4), "macd_signal": round(msig, 4), "macd_hist": round(mhist, 4),
+            "adx": round(adxv, 2), "williams_r": round(wr, 2), "bb_pct": round(bbp * 100, 1),
+            "ema20": round(e20, 4), "ema50": round(e50, 4), "ema200": round(e200, 4),
+            "vwap": round(vwap, 4), "volume_ratio": round(vol_ratio, 3), "trend_slope_pct": round(trend_pct, 4),
+            "candle_pattern": candle_pattern, "candle_signal": candle_signal, "candle_score": round(candle_score, 3),
+        }
+    }
+    return _sanitize(payload)
 
 # ══════ ENDPOINTS ══════════════════════════════════════════════════════════════
 
@@ -238,23 +387,33 @@ async def get_tickers(symbols: str = "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,AAPL,N
 
 @app.get("/api/market/history")
 async def get_history(symbol: str = "BTC_USDT", interval: str = "1h", limit: int = 100):
+    sym = _sym(symbol)
+    interval = str(interval or "1h")
+    limit = max(20, min(int(limit or 100), 1000))
     try:
-        sym = _sym(symbol)
-        df  = await data_manager.get_ohlcv(sym, interval, limit)
-        if df.empty: raise HTTPException(404, "No data")
+        df = await data_manager.get_ohlcv(sym, interval, limit)
         df = _compute_indicators(df)
-        return {"symbol": sym, "interval": interval, "data": _df_records(df), "signal": _signal(df)}
-    except HTTPException: raise
-    except Exception as e: raise HTTPException(500, str(e))
+        signal = _signal(df)
+        return _sanitize({"symbol": sym, "interval": interval, "count": len(df), "data": _df_records(df), "signal": signal})
+    except Exception as e:
+        logger.exception("history endpoint recovered for %s %s", sym, interval)
+        # API contract stays stable so UI widgets do not die on provider/cache errors.
+        return _sanitize({
+            "symbol": sym, "interval": interval, "count": 0, "data": [],
+            "signal": {"signal": "NEUTRAL", "confidence": 35, "reasons": [f"Data unavailable: {e}"], "score": 0},
+            "error": str(e),
+        })
 
 @app.get("/api/market/signal/{symbol}")
 async def get_signal(symbol: str, timeframe: str = "1h"):
+    sym = _sym(symbol)
+    timeframe = str(timeframe or "1h")
     try:
-        df = await data_manager.get_ohlcv(_sym(symbol), interval=timeframe, limit=100)
-        if df.empty: raise HTTPException(404, "No data")
-        return _signal(_compute_indicators(df))
-    except HTTPException: raise
-    except Exception as e: raise HTTPException(500, str(e))
+        df = await data_manager.get_ohlcv(sym, interval=timeframe, limit=240)
+        return _sanitize(_signal(_compute_indicators(df)))
+    except Exception as e:
+        logger.exception("signal endpoint recovered for %s %s", sym, timeframe)
+        return _sanitize({"signal": "NEUTRAL", "confidence": 35, "reasons": [f"Signal unavailable: {e}"], "score": 0})
 
 @app.get("/api/predict/{symbol}")
 async def get_prediction(symbol: str, timeframe: str = "1h", pred_len: int = 24):

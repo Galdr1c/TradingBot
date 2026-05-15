@@ -1,99 +1,121 @@
 import axios from 'axios';
 
-const API_BASE = "http://localhost:8000/api";
-const WS_BASE  = "ws://localhost:8000";
+const DEFAULT_API_BASE = 'http://localhost:8000/api';
+const DEFAULT_WS_BASE = 'ws://localhost:8000';
 
-const api = axios.create({ baseURL: API_BASE, timeout: 30000 });
+const stripSlash = (s) => String(s || '').replace(/\/+$/, '');
+
+export const getApiBase = () => {
+  const saved = localStorage.getItem('qa_api_base');
+  return stripSlash(saved || DEFAULT_API_BASE);
+};
+
+export const setApiBase = (baseUrl) => {
+  const normalized = stripSlash(baseUrl || DEFAULT_API_BASE);
+  const apiBase = normalized.endsWith('/api') ? normalized : `${normalized}/api`;
+  localStorage.setItem('qa_api_base', apiBase);
+  api.defaults.baseURL = apiBase;
+  return apiBase;
+};
+
+export const resetApiBase = () => {
+  localStorage.removeItem('qa_api_base');
+  api.defaults.baseURL = DEFAULT_API_BASE;
+  return DEFAULT_API_BASE;
+};
+
+const wsBaseFromApi = () => getApiBase().replace(/^http/i, 'ws').replace(/\/api$/, '');
+
+const api = axios.create({ baseURL: getApiBase(), timeout: 35000 });
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const normalizeError = (error) => {
+  const status = error?.response?.status;
+  const detail = error?.response?.data?.detail || error?.response?.data?.error || error?.message || 'Unknown error';
+  const e = new Error(status ? `HTTP ${status}: ${detail}` : detail);
+  e.status = status;
+  e.payload = error?.response?.data;
+  return e;
+};
+
+async function request(fn, { retries = 1 } = {}) {
+  let last;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try { return await fn(); }
+    catch (error) {
+      last = error;
+      const status = error?.response?.status;
+      if (attempt >= retries || (status && status < 500)) break;
+      await sleep(500 * (attempt + 1));
+    }
+  }
+  throw normalizeError(last);
+}
 
 // ── Market ─────────────────────────────────────────────────────────────────
 
-export const getTickers = async (
-  symbols = "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,AAPL,NVDA,TSLA,MSFT"
-) => (await api.get(`/market/tickers?symbols=${encodeURIComponent(symbols)}`)).data;
+export const DEFAULT_SYMBOLS = 'BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,AAPL,NVDA,TSLA,MSFT';
 
-/**
- * Returns: { symbol, interval, data: OHLCV[], signal: {signal,confidence,reasons,score,indicators} }
- */
-export const getHistory = async (symbol, interval = "1h", limit = 100) => {
-  const sym = symbol.replace("/", "_");
-  return (await api.get(`/market/history?symbol=${encodeURIComponent(sym)}&interval=${interval}&limit=${limit}`)).data;
+export const getTickers = async (symbols = DEFAULT_SYMBOLS) =>
+  request(async () => (await api.get('/market/tickers', { params: { symbols } })).data, { retries: 2 });
+
+export const getHistory = async (symbol, interval = '1h', limit = 100) => {
+  const sym = String(symbol || 'BTC/USDT').replace('/', '_');
+  return request(async () => (await api.get('/market/history', { params: { symbol: sym, interval, limit } })).data, { retries: 2 });
 };
 
-export const getSignal = async (symbol, timeframe = "1h") => {
-  const sym = symbol.replace("/", "_");
-  return (await api.get(`/market/signal/${sym}?timeframe=${timeframe}`)).data;
+export const getSignal = async (symbol, timeframe = '1h') => {
+  const sym = String(symbol || 'BTC/USDT').replace('/', '_');
+  return request(async () => (await api.get(`/market/signal/${encodeURIComponent(sym)}`, { params: { timeframe } })).data, { retries: 2 });
 };
 
 // ── Kronos Forecast ─────────────────────────────────────────────────────────
-/**
- * Returns: { symbol, forecast: [{t,p,hi,lo,timestamp}], model, timestamp }
- */
-export const getPrediction = async (symbol, timeframe = "1h", predLen = 24) => {
-  const sym = symbol.replace("/", "_");
-  return (await api.get(`/predict/${sym}?timeframe=${timeframe}&pred_len=${predLen}`)).data;
+export const getPrediction = async (symbol, timeframe = '1h', predLen = 24) => {
+  const sym = String(symbol || 'BTC/USDT').replace('/', '_');
+  return request(async () => (await api.get(`/predict/${encodeURIComponent(sym)}`, { params: { timeframe, pred_len: predLen } })).data);
 };
 
-// ── Swarm ────────────────────────────────────────────────────────────────────
-/**
- * Returns: { symbol, agents: [...], timestamp }
- */
+// ── Swarm ───────────────────────────────────────────────────────────────────
 export const runSwarm = async (symbol) =>
-  (await api.post("/swarm/run", { symbol })).data;
+  request(async () => (await api.post('/swarm/run', { symbol })).data);
 
 // ── Backtesting ──────────────────────────────────────────────────────────────
-
 export const runBacktest = async (symbol) =>
-  (await api.get(`/backtest/run?symbol=${encodeURIComponent(symbol)}`)).data;
+  request(async () => (await api.get('/backtest/run', { params: { symbol } })).data);
 
-// ── OpenTrader Strategy Engine ────────────────────────────────────────────────
-
+// ── OpenTrader Strategy Engine ───────────────────────────────────────────────
 export const getOpenTraderStatus = async () =>
-  (await api.get("/opentrader/status")).data;
+  request(async () => (await api.get('/opentrader/status')).data, { retries: 1 });
 
-/**
- * Run GRID / DCA / RSI strategy calculation or paper trade.
- * @param {string} strategy  "grid" | "dca" | "rsi"
- * @param {string} symbol    "BTC/USDT"
- * @param {object} params    Strategy-specific params (highPrice, lowPrice, gridLevels, ...)
- * @param {boolean} paper    true = paper mode
- */
 export const runOpenTraderStrategy = async (strategy, symbol, params, paper = true) =>
-  (await api.post("/opentrader/strategy", { strategy, symbol, params, paper })).data;
+  request(async () => (await api.post('/opentrader/strategy', { strategy, symbol, params, paper })).data);
 
-/**
- * Run OpenTrader backtest (CLI when available, Python fallback otherwise).
- */
 export const runOpenTraderBacktest = async (strategy, symbol, timeframe, from_date, to_date, params = {}) =>
-  (await api.post("/opentrader/backtest", { strategy, symbol, timeframe, from_date, to_date, params })).data;
+  request(async () => (await api.post('/opentrader/backtest', { strategy, symbol, timeframe, from_date, to_date, params })).data);
 
 // ── News ─────────────────────────────────────────────────────────────────────
-
-export const getNews = async (symbols = "BTC,ETH,crypto", limit = 20) =>
-  (await api.get(`/news?symbols=${encodeURIComponent(symbols)}&limit=${limit}`)).data;
+export const getNews = async (symbols = 'BTC,ETH,crypto', limit = 20) =>
+  request(async () => (await api.get('/news', { params: { symbols, limit } })).data, { retries: 1 });
 
 export const getSymbolNews = async (symbol, limit = 10) => {
-  const sym = symbol.replace("/USDT","").replace("/USD","").replace("/","");
-  return (await api.get(`/news/${sym}?limit=${limit}`)).data;
+  const sym = String(symbol || 'BTC').replace('/USDT', '').replace('/USD', '').replace('/', '');
+  return request(async () => (await api.get(`/news/${encodeURIComponent(sym)}`, { params: { limit } })).data);
 };
 
-// ── Portfolio / Bots ──────────────────────────────────────────────────────────
+// ── Portfolio / Bots ─────────────────────────────────────────────────────────
+export const getPortfolio = async () => request(async () => (await api.get('/portfolio')).data, { retries: 1 });
+export const getBots = async () => request(async () => (await api.get('/bots')).data, { retries: 1 });
+export const toggleBot = async (id) => request(async () => (await api.post(`/bots/${id}/toggle`)).data);
 
-export const getPortfolio  = async () => (await api.get("/portfolio")).data;
-export const getBots        = async () => (await api.get("/bots")).data;
-export const toggleBot      = async (id) => (await api.post(`/bots/${id}/toggle`)).data;
+// ── Config / Stats ───────────────────────────────────────────────────────────
+export const getConfig = async () => request(async () => (await api.get('/config')).data, { retries: 1 });
+export const updateConfig = async (cfg) => request(async () => (await api.post('/config', cfg)).data);
+export const getSystemStats = async () => request(async () => (await api.get('/system/stats')).data, { retries: 1 });
 
-// ── Config / Stats ────────────────────────────────────────────────────────────
+// ── Agent chat ───────────────────────────────────────────────────────────────
+export const chatWithAgent = async (message) =>
+  request(async () => (await api.post('/agent/chat', { message })).data);
 
-export const getConfig      = async () => (await api.get("/config")).data;
-export const updateConfig   = async (cfg) => (await api.post("/config", cfg)).data;
-export const getSystemStats = async () => (await api.get("/system/stats")).data;
-
-// ── Agent chat ────────────────────────────────────────────────────────────────
-
-export const chatWithAgent  = async (message) =>
-  (await api.post("/agent/chat", { message })).data;
-
-// ── WebSockets ────────────────────────────────────────────────────────────────
-
-export const createMarketWS = () => new WebSocket(`${WS_BASE}/ws/market`);
-export const createLogsWS   = () => new WebSocket(`${WS_BASE}/ws/logs`);
+// ── WebSockets ───────────────────────────────────────────────────────────────
+export const createMarketWS = () => new WebSocket(`${wsBaseFromApi()}/ws/market`);
+export const createLogsWS = () => new WebSocket(`${wsBaseFromApi()}/ws/logs`);
