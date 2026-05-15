@@ -143,7 +143,7 @@ export default function Charts() {
         </div>
 
         <div className="chart-area" style={{ padding:'8px 4px' }}>
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={260}>
             {tab === 'price' ? (
               <AreaChart data={data} margin={{ top:4, right:4, left:0, bottom:0 }}>
                 <defs>

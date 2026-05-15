@@ -506,7 +506,15 @@ body {
 .tbl tbody tr:hover { background: rgba(255,255,255,0.03); }
 
 /* ── Chart placeholder ───────────────────────────────────────────── */
-.chart-area { flex: 1; position: relative; width: 100%; padding: 16px; min-height: 250px; }
+.chart-area {
+  flex: 1;
+  position: relative;
+  width: 100%;
+  height: 270px;
+  min-height: 250px;
+  padding: 16px;
+}
+.chart-area .recharts-responsive-container { min-height: 250px; }
 
 /* ── Select ──────────────────────────────────────────────────────── */
 select {

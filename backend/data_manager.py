@@ -3,28 +3,28 @@ import pandas as pd
 import ccxt.async_support as ccxt
 import yfinance as yf
 import asyncio
-import os
-from datetime import datetime, timedelta
 import logging
+from typing import Tuple
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DataManager")
+
 
 class DataManager:
     def __init__(self, db_path="market_data.db"):
         self.db_path = db_path
         self._init_db()
         self.binance = ccxt.binance({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
+            "enableRateLimit": True,
+            "options": {"defaultType": "spot"},
         })
-        
+
     def _init_db(self):
         """Initialize SQLite database for OHLCV caching."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS ohlcv (
                 symbol TEXT,
                 timestamp DATETIME,
@@ -37,99 +37,185 @@ class DataManager:
                 interval TEXT,
                 PRIMARY KEY (symbol, timestamp, interval)
             )
-        ''')
+            """
+        )
         conn.commit()
         conn.close()
 
     def _normalize_interval(self, interval: str) -> str:
-        """Ensure interval is in a format Binance understands (e.g., 5 -> 5m, 1h -> 1h)."""
+        """Normalize UI intervals into provider-compatible canonical intervals."""
+        interval = str(interval or "1h").strip().lower()
         if interval.isdigit():
             return f"{interval}m"
         return interval
 
-    async def get_ohlcv(self, symbol: str, interval: str = '1h', limit: int = 100):
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Normalize URL-safe symbols such as BTC_USDT into BTC/USDT."""
+        return str(symbol or "BTC/USDT").strip().upper().replace("_", "/")
+
+    def _is_crypto_symbol(self, symbol: str) -> bool:
+        """Crypto pairs use slash notation in this project, e.g. BTC/USDT."""
+        return "/" in symbol
+
+    def _to_yfinance_symbol(self, symbol: str) -> str:
+        """Convert app symbols to Yahoo Finance tickers.
+
+        Examples:
+        BTC/USDT -> BTC-USD
+        ETH/USDC -> ETH-USD
+        MSFT     -> MSFT
         """
-        Get OHLCV data with fallback logic:
-        1. Try local cache
-        2. Try Binance (CCXT)
-        3. Try yfinance (Fallback)
+        if "/" not in symbol:
+            return symbol
+        base, quote = symbol.split("/", 1)
+        quote = quote.upper()
+        if quote in {"USDT", "USDC", "BUSD", "USD"}:
+            quote = "USD"
+        return f"{base}-{quote}"
+
+    def _yfinance_interval_and_period(self, interval: str) -> Tuple[str, str]:
+        """Map project intervals to yfinance intervals and safe history periods."""
+        mapping = {
+            "1m": ("1m", "7d"),
+            "5m": ("5m", "60d"),
+            "15m": ("15m", "60d"),
+            "1h": ("1h", "60d"),
+            # yfinance does not reliably support 4h directly; fetch 1h then resample.
+            "4h": ("1h", "90d"),
+            "1d": ("1d", "2y"),
+        }
+        return mapping.get(interval, ("1h", "60d"))
+
+    async def get_ohlcv(self, symbol: str, interval: str = "1h", limit: int = 100):
+        """
+        Get OHLCV data with source-aware fallback logic.
+
+        Crypto pairs: cache -> Binance -> yfinance fallback
+        Stocks/ETFs : cache -> yfinance
+
+        This avoids noisy Binance errors for stock symbols such as AAPL/MSFT,
+        while still keeping Binance as the primary provider for crypto pairs.
         """
         interval = self._normalize_interval(interval)
-        # Normalize symbol for consistency (e.g., BTC_USDT -> BTC/USDT)
-        original_symbol = symbol
-        symbol = symbol.replace('_', '/')
+        symbol = self._normalize_symbol(symbol)
+        limit = max(1, int(limit or 100))
 
-        # 1. Try Cache first
         cached_data = self._get_from_cache(symbol, interval, limit)
         if not cached_data.empty and len(cached_data) >= limit:
             return cached_data
 
-        # 2. Try Binance
-        try:
-            ohlcv = await self.binance.fetch_ohlcv(symbol, timeframe=interval, limit=limit)
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df['source'] = 'binance'
-            df['symbol'] = symbol
-            df['interval'] = interval
-            self._save_to_cache(df)
-            return df
-        except Exception as e:
-            logger.error(f"Binance fetch failed for {symbol}: {e}")
+        if self._is_crypto_symbol(symbol):
+            try:
+                return await self._fetch_binance(symbol, interval, limit)
+            except Exception as e:
+                logger.warning(f"Binance fetch failed for {symbol}: {e}")
 
-        # 3. Try yfinance Fallback
         try:
-            # Map CCXT symbol to yfinance (approximate)
-            yf_sym = symbol.replace('/', '-')
-            if '-' not in yf_sym and 'USDT' in yf_sym:
-                yf_sym = yf_sym.replace('USDT', '-USD')
-            elif '-' not in yf_sym and 'USDC' in yf_sym:
-                yf_sym = yf_sym.replace('USDC', '-USD')
-            
-            ticker = yf.Ticker(yf_sym)
-            # Map intervals
-            yf_interval = '1h' if interval == '1h' else '1d' if interval == '1d' else '1m'
-            df_yf = ticker.history(period='1mo', interval=yf_interval).tail(limit)
-            
-            if not df_yf.empty:
-                df_yf = df_yf.reset_index()
-                # yfinance might use 'Date' or 'Datetime'
-                time_col = 'Date' if 'Date' in df_yf.columns else 'Datetime'
-                df_yf = df_yf.rename(columns={
-                    time_col: 'timestamp',
-                    'Open': 'open', 'High': 'high', 'Low': 'low', 
-                    'Close': 'close', 'Volume': 'volume'
+            return await asyncio.to_thread(self._fetch_yfinance, symbol, interval, limit)
+        except Exception as e:
+            logger.warning(f"yfinance fetch failed for {symbol}: {e}")
+
+        return cached_data
+
+    async def _fetch_binance(self, symbol: str, interval: str, limit: int) -> pd.DataFrame:
+        ohlcv = await self.binance.fetch_ohlcv(symbol, timeframe=interval, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(None)
+        df["source"] = "binance"
+        df["symbol"] = symbol
+        df["interval"] = interval
+        df = self._finalize_ohlcv(df, symbol, interval, "binance", limit)
+        self._save_to_cache(df)
+        return df
+
+    def _fetch_yfinance(self, symbol: str, interval: str, limit: int) -> pd.DataFrame:
+        yf_symbol = self._to_yfinance_symbol(symbol)
+        yf_interval, period = self._yfinance_interval_and_period(interval)
+
+        ticker = yf.Ticker(yf_symbol)
+        df = ticker.history(period=period, interval=yf_interval, auto_adjust=False, actions=False)
+        if df is None or df.empty:
+            raise ValueError(f"empty response for {yf_symbol}")
+
+        df = df.reset_index()
+        time_col = "Datetime" if "Datetime" in df.columns else "Date"
+        df = df.rename(
+            columns={
+                time_col: "timestamp",
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            }
+        )
+
+        df = df[["timestamp", "open", "high", "low", "close", "volume"]].copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(None)
+
+        if interval == "4h":
+            df = (
+                df.set_index("timestamp")
+                .resample("4h")
+                .agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
                 })
-                df_yf['timestamp'] = pd.to_datetime(df_yf['timestamp'])
-                df_yf['source'] = 'yfinance'
-                df_yf['symbol'] = symbol
-                df_yf['interval'] = interval
-                # Normalize columns
-                final_df = df_yf[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'source', 'symbol', 'interval']]
-                self._save_to_cache(final_df)
-                return final_df
-        except Exception as e:
-            logger.error(f"yfinance fallback failed for {symbol}: {e}")
+                .dropna()
+                .reset_index()
+            )
 
-        return cached_data # Return whatever we have if all fails
+        df = self._finalize_ohlcv(df, symbol, interval, "yfinance", limit)
+        self._save_to_cache(df)
+        return df
+
+    def _finalize_ohlcv(self, df: pd.DataFrame, symbol: str, interval: str, source: str, limit: int) -> pd.DataFrame:
+        df = df.copy()
+        df["source"] = source
+        df["symbol"] = symbol
+        df["interval"] = interval
+        numeric_cols = ["open", "high", "low", "close", "volume"]
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.dropna(subset=["timestamp", "open", "high", "low", "close"])
+        df["volume"] = df["volume"].fillna(0)
+        df = df.sort_values("timestamp").tail(limit)
+        return df[["timestamp", "open", "high", "low", "close", "volume", "source", "symbol", "interval"]]
 
     def _save_to_cache(self, df: pd.DataFrame):
+        if df is None or df.empty:
+            return
         conn = sqlite3.connect(self.db_path)
         try:
-            df.to_sql('ohlcv', conn, if_exists='append', index=False, method='multi')
-        except sqlite3.IntegrityError:
-            # Handle duplicates by ignoring or updating
-            pass
-        conn.close()
+            records = []
+            for row in df.itertuples(index=False):
+                ts = pd.to_datetime(row.timestamp).isoformat()
+                records.append((row.symbol, ts, row.open, row.high, row.low, row.close, row.volume, row.source, row.interval))
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO ohlcv
+                (symbol, timestamp, open, high, low, close, volume, source, interval)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                records,
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def _get_from_cache(self, symbol: str, interval: str, limit: int):
         conn = sqlite3.connect(self.db_path)
-        query = "SELECT * FROM ohlcv WHERE symbol = ? AND interval = ? ORDER BY timestamp DESC LIMIT ?"
-        df = pd.read_sql(query, conn, params=(symbol, interval, int(limit)))
-        conn.close()
+        try:
+            query = "SELECT * FROM ohlcv WHERE symbol = ? AND interval = ? ORDER BY timestamp DESC LIMIT ?"
+            df = pd.read_sql(query, conn, params=(symbol, interval, int(limit)))
+        finally:
+            conn.close()
         if not df.empty:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            return df.sort_values('timestamp')
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            return df.sort_values("timestamp")
         return pd.DataFrame()
 
     async def close(self):
